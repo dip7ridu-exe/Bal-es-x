@@ -17,13 +17,14 @@ Não é necessário configurar banco de dados, servidor, chave de API ou variáv
 
 ## Principais controles
 
-- **Modo Falas contextual:** mantém a página e a arte ao redor visíveis, aproxima cada balão e avança na ordem ocidental ou mangá.
+- **Modo Falas por toque:** mantém a página inteira visível; toque no balão de fala desejado e somente ele cresce perto da posição original. Toque no balão ampliado para seguir a ordem ocidental ou mangá.
+- **Sem onomatopeias automáticas:** o reconhecimento procura balões de fala fechados e ignora letras soltas da arte. Para formatos incomuns, use a seleção manual.
 - **Escolher área:** permite marcar manualmente uma fala quando o desenho não possui um balão tradicional.
-- **F:** abre ou avança o Modo Falas.
+- **F:** ativa ou encerra o Modo Falas.
 - **Setas:** mudam de página conforme a direção escolhida.
 - **+ / − / 0:** altera ou restaura o zoom.
 - **Página única, dupla e rolagem vertical.**
-- **Celular:** layout adaptado às áreas seguras da tela, gestos estáveis e rolagem contínua sem saltos de página.
+- **Celular:** layout adaptado às áreas seguras da tela, miniaturas isoladas da barra inferior, controles completos de zoom, rotação e tela cheia, além de rolagem contínua sem saltos de página.
 - **Brilho, contraste, rotação, largura, página inteira e tela cheia.**
 - **Histórico local:** guarda apenas nome, progresso e preferências neste navegador. O arquivo do quadrinho não é armazenado.
 

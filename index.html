@@ -8,7 +8,7 @@
     <title>Balão — Leitor de quadrinhos</title>
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <link rel="manifest" href="./manifest.webmanifest" />
-    <link rel="stylesheet" href="./styles.css?v=2-mobile" />
+    <link rel="stylesheet" href="./styles.css?v=3-bubble" />
   </head>
   <body>
     <div id="app">
@@ -130,6 +130,7 @@
           <div class="book-title-block">
             <strong id="bookTitle">Quadrinho</strong>
             <span id="bookMeta">CBR · leitura local</span>
+            <span id="mobilePageIndicator" class="mobile-page-indicator">1 / 1</span>
           </div>
 
           <div class="reader-center-controls" aria-label="Controles de visualização">
@@ -190,7 +191,8 @@
             </button>
 
             <div id="guidedLayer" class="guided-layer" hidden>
-              <canvas id="guidedCanvas" aria-label="Página completa com a fala atual ampliada"></canvas>
+              <div id="guidedHotspots" class="guided-hotspots" aria-label="Balões de fala encontrados"></div>
+              <canvas id="guidedCanvas" class="guided-bubble" tabindex="0" role="button" aria-label="Balão de fala ampliado; toque para avançar" hidden></canvas>
               <div class="guided-topbar">
                 <div class="guided-status">
                   <span class="guided-pulse" aria-hidden="true"></span>
@@ -201,7 +203,7 @@
                   <svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg>
                 </button>
               </div>
-              <div class="guided-help" id="guidedHelp">A página continua inteira enquanto a fala é aproximada</div>
+              <div class="guided-help" id="guidedHelp">Toque no balão que deseja ampliar</div>
               <div class="guided-controls">
                 <button id="guidedPreviousButton" class="guided-secondary" type="button">
                   <svg viewBox="0 0 24 24"><path d="m15 5-7 7 7 7"/></svg>
@@ -299,6 +301,23 @@
             </div>
           </fieldset>
 
+          <fieldset class="setting-group">
+            <legend>Zoom e tela</legend>
+            <div class="mobile-view-tools">
+              <button id="mobileZoomOutButton" class="mobile-view-tool" type="button" aria-label="Diminuir zoom">−</button>
+              <button id="mobileZoomValueButton" class="mobile-view-tool mobile-zoom-value" type="button" aria-label="Restaurar zoom">100%</button>
+              <button id="mobileZoomInButton" class="mobile-view-tool" type="button" aria-label="Aumentar zoom">+</button>
+              <button id="mobileRotateButton" class="mobile-view-tool" type="button" aria-label="Girar página">
+                <svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg>
+                Girar
+              </button>
+              <button id="mobileFullscreenButton" class="mobile-view-tool" type="button" aria-label="Tela cheia">
+                <svg viewBox="0 0 24 24"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg>
+                Tela cheia
+              </button>
+            </div>
+          </fieldset>
+
           <div class="setting-group sliders-group">
             <label for="brightnessSlider"><span>Brilho</span><output id="brightnessOutput">100%</output></label>
             <input id="brightnessSlider" type="range" min="60" max="140" value="100" />
@@ -334,6 +353,6 @@
 
     <script src="./vendor/unarchiver/unarchiver.min.js"></script>
     <script>window.LocalUnarchiver = Unarchiver;</script>
-    <script type="module" src="./app.js?v=2-mobile"></script>
+    <script type="module" src="./app.js?v=3-bubble"></script>
   </body>
 </html>

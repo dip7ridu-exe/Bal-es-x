@@ -1,4 +1,4 @@
-import { calculateGuidedViewport, detectSpeechRegions, sortRegions } from "./guided.js?v=2-mobile";
+import { detectSpeechRegions, sortRegions } from "./guided.js?v=3-bubble";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -36,6 +36,7 @@ const dom = {
   pageSlider: $("#pageSlider"),
   footerCurrentPage: $("#footerCurrentPage"),
   footerTotalPages: $("#footerTotalPages"),
+  mobilePageIndicator: $("#mobilePageIndicator"),
   zoomOutButton: $("#zoomOutButton"),
   zoomInButton: $("#zoomInButton"),
   zoomValueButton: $("#zoomValueButton"),
@@ -51,6 +52,11 @@ const dom = {
   mobileGuidedButton: $("#mobileGuidedButton"),
   mobileThumbsButton: $("#mobileThumbsButton"),
   mobileSettingsButton: $("#mobileSettingsButton"),
+  mobileZoomOutButton: $("#mobileZoomOutButton"),
+  mobileZoomValueButton: $("#mobileZoomValueButton"),
+  mobileZoomInButton: $("#mobileZoomInButton"),
+  mobileRotateButton: $("#mobileRotateButton"),
+  mobileFullscreenButton: $("#mobileFullscreenButton"),
   settingsSheet: $("#settingsSheet"),
   settingsBackdrop: $("#settingsBackdrop"),
   closeSettingsButton: $("#closeSettingsButton"),
@@ -62,6 +68,7 @@ const dom = {
   contrastOutput: $("#contrastOutput"),
   autoHideToggle: $("#autoHideToggle"),
   guidedLayer: $("#guidedLayer"),
+  guidedHotspots: $("#guidedHotspots"),
   guidedCanvas: $("#guidedCanvas"),
   guidedCounter: $("#guidedCounter"),
   guidedHelp: $("#guidedHelp"),
@@ -105,7 +112,7 @@ const state = {
   renderToken: 0,
   guidedActive: false,
   guidedRegions: [],
-  guidedRegionIndex: 0,
+  guidedRegionIndex: -1,
   guidedCache: new Map(),
   manualMode: false,
   manualStart: null,
@@ -115,8 +122,7 @@ const state = {
   thumbnailObserver: null,
   controlsTimer: null,
   pageAspect: null,
-  guidedView: null,
-  guidedAnimationFrame: null,
+  guidedLayoutFrame: null,
   touch: { startX: 0, startY: 0, startTime: 0, pinchDistance: 0, pinchZoom: 1, lastTap: 0 },
 };
 
@@ -693,6 +699,7 @@ function updatePageControls() {
   const current = state.pageIndex + 1;
   dom.pageSlider.value = String(current);
   dom.footerCurrentPage.textContent = String(current);
+  dom.mobilePageIndicator.textContent = `${current} / ${state.pageCount}`;
   const max = Math.max(1, state.pageCount - 1);
   const value = state.pageCount <= 1 ? 0 : (state.pageIndex / max) * 100;
   dom.pageSlider.style.setProperty("--range-value", `${value}%`);
@@ -788,6 +795,7 @@ function setFit(fit) {
   $$('[data-fit]').forEach((button) => button.classList.toggle("active", button.dataset.fit === fit));
   dom.fitLabel.textContent = fit === "page" ? "Ajustar" : fit === "width" ? "Largura" : "Original";
   persistPrefs();
+  queueGuidedLayout();
 }
 
 function cycleFit() {
@@ -800,6 +808,8 @@ function setZoom(value) {
   state.zoom = Math.max(0.5, Math.min(5, Math.round(value * 20) / 20));
   dom.pageStage.style.setProperty("--zoom", state.zoom);
   dom.zoomValueButton.textContent = `${Math.round(state.zoom * 100)}%`;
+  dom.mobileZoomValueButton.textContent = `${Math.round(state.zoom * 100)}%`;
+  queueGuidedLayout();
 }
 
 function applyPageVisuals() {
@@ -810,6 +820,8 @@ function applyPageVisuals() {
   dom.scrollPages.style.setProperty("--brightness", state.brightness / 100);
   dom.scrollPages.style.setProperty("--contrast", state.contrast / 100);
   dom.zoomValueButton.textContent = `${Math.round(state.zoom * 100)}%`;
+  dom.mobileZoomValueButton.textContent = `${Math.round(state.zoom * 100)}%`;
+  queueGuidedLayout();
 }
 
 function applyPreferencesToUi() {
@@ -854,17 +866,25 @@ function guidedCacheKey() {
   return `${state.pageIndex}:${state.direction}`;
 }
 
+function queueGuidedLayout() {
+  if (!state.guidedActive) return;
+  cancelAnimationFrame(state.guidedLayoutFrame);
+  state.guidedLayoutFrame = requestAnimationFrame(() => {
+    positionGuidedHotspots();
+    if (state.guidedRegionIndex >= 0) drawGuidedBubble(state.guidedRegionIndex, { animate: false });
+  });
+}
+
 async function startGuidedMode() {
   if (!state.reader) return;
   if (state.guidedActive) {
-    nextGuidedRegion();
+    closeGuidedMode();
     return;
   }
   if (state.viewMode !== "single") await setViewMode("single");
   setZoom(1);
   state.rotation = 0;
   applyPageVisuals();
-  await renderPagedView();
   setLoading(true, "Procurando as falas…", "Analisando esta página apenas no seu aparelho", 48);
   try {
     const key = guidedCacheKey();
@@ -879,15 +899,18 @@ async function startGuidedMode() {
       return;
     }
     state.guidedRegions = regions;
-    state.guidedRegionIndex = 0;
+    state.guidedRegionIndex = -1;
     state.guidedActive = true;
-    state.guidedView = null;
     dom.guidedLayer.hidden = false;
+    dom.guidedCanvas.hidden = true;
     dom.guidedButton.classList.add("active");
-    dom.guidedButtonLabel.textContent = "Próxima fala";
+    dom.guidedButtonLabel.textContent = "Sair do modo";
     dom.mobileGuidedButton.classList.add("active");
     dom.readerView.classList.remove("controls-hidden");
-    drawGuidedRegion();
+    renderGuidedHotspots();
+    dom.guidedCounter.textContent = `0 de ${regions.length}`;
+    dom.guidedHelp.textContent = "Toque no balão que deseja ampliar";
+    requestAnimationFrame(positionGuidedHotspots);
   } catch (error) {
     setLoading(false);
     console.error(error);
@@ -896,163 +919,140 @@ async function startGuidedMode() {
   }
 }
 
-function roundedRectPath(context, x, y, width, height, radius) {
-  const r = Math.min(radius, width / 2, height / 2);
-  context.beginPath();
-  context.moveTo(x + r, y);
-  context.lineTo(x + width - r, y);
-  context.quadraticCurveTo(x + width, y, x + width, y + r);
-  context.lineTo(x + width, y + height - r);
-  context.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
-  context.lineTo(x + r, y + height);
-  context.quadraticCurveTo(x, y + height, x, y + height - r);
-  context.lineTo(x, y + r);
-  context.quadraticCurveTo(x, y, x + r, y);
-  context.closePath();
+function imageRegionRect(region) {
+  const imageRect = dom.pageImage.getBoundingClientRect();
+  const layerRect = dom.guidedLayer.getBoundingClientRect();
+  const scaleX = imageRect.width / dom.pageImage.naturalWidth;
+  const scaleY = imageRect.height / dom.pageImage.naturalHeight;
+  return {
+    left: imageRect.left - layerRect.left + region.x * scaleX,
+    top: imageRect.top - layerRect.top + region.y * scaleY,
+    width: region.width * scaleX,
+    height: region.height * scaleY,
+    imageRect,
+    layerRect,
+  };
 }
 
-function paintGuidedView(view, region) {
-  if (!state.guidedActive || !state.guidedRegions.length) return;
-  const canvas = dom.guidedCanvas;
-  const bounds = dom.guidedLayer.getBoundingClientRect();
-  const dpr = Math.min(isMobileLayout() ? 1.5 : 2, devicePixelRatio || 1);
-  const pixelWidth = Math.max(1, Math.floor(bounds.width * dpr));
-  const pixelHeight = Math.max(1, Math.floor(bounds.height * dpr));
-  if (canvas.width !== pixelWidth) canvas.width = pixelWidth;
-  if (canvas.height !== pixelHeight) canvas.height = pixelHeight;
-  const context = canvas.getContext("2d", { alpha: false });
-  context.setTransform(dpr, 0, 0, dpr, 0, 0);
-  context.fillStyle = "#040506";
-  context.fillRect(0, 0, bounds.width, bounds.height);
+function renderGuidedHotspots() {
+  dom.guidedHotspots.replaceChildren();
+  const fragment = document.createDocumentFragment();
+  state.guidedRegions.forEach((region, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "guided-hotspot";
+    button.dataset.index = String(index);
+    button.setAttribute("aria-label", `Ampliar fala ${index + 1} de ${state.guidedRegions.length}`);
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      selectGuidedRegion(index);
+    });
+    fragment.append(button);
+  });
+  dom.guidedHotspots.append(fragment);
+}
 
-  const overview = overviewGuidedView(bounds);
-  context.save();
-  context.imageSmoothingEnabled = true;
-  context.imageSmoothingQuality = "high";
-  context.filter = `brightness(${state.brightness}%) contrast(${state.contrast}%)`;
-  context.drawImage(
-    dom.pageImage,
-    overview.x,
-    overview.y,
-    dom.pageImage.naturalWidth * overview.scale,
-    dom.pageImage.naturalHeight * overview.scale,
-  );
-  context.restore();
-  context.fillStyle = "rgba(0,0,0,.2)";
-  context.fillRect(0, 0, bounds.width, bounds.height);
+function positionGuidedHotspots() {
+  if (!state.guidedActive || dom.guidedLayer.hidden || !dom.pageImage.naturalWidth) return;
+  $$(".guided-hotspot", dom.guidedHotspots).forEach((button, index) => {
+    const rect = imageRegionRect(state.guidedRegions[index]);
+    const visible = rect.left + rect.width > 0
+      && rect.top + rect.height > 0
+      && rect.left < rect.layerRect.width
+      && rect.top < rect.layerRect.height;
+    button.hidden = !visible;
+    if (!visible) return;
+    const width = Math.max(28, rect.width);
+    const height = Math.max(24, rect.height);
+    button.style.left = `${rect.left - (width - rect.width) / 2}px`;
+    button.style.top = `${rect.top - (height - rect.height) / 2}px`;
+    button.style.width = `${width}px`;
+    button.style.height = `${height}px`;
+  });
+}
 
+function drawGuidedBubble(index, options = {}) {
+  if (!state.guidedActive || index < 0 || !state.guidedRegions[index]) return;
+  const region = state.guidedRegions[index];
+  const placed = imageRegionRect(region);
+  const bounds = placed.layerRect;
   const mobile = isMobileLayout();
-  const topInset = mobile ? 58 : 54;
-  const bottomInset = mobile ? 76 : 70;
-  const usableHeight = Math.max(140, bounds.height - topInset - bottomInset);
-  const lensWidth = Math.min(bounds.width - (mobile ? 20 : 44), bounds.width * (mobile ? 0.94 : 0.8));
-  const focusedHeight = region.height * view.scale;
-  const lensHeight = Math.min(
-    usableHeight * (mobile ? 0.62 : 0.58),
-    Math.max(mobile ? 176 : 210, focusedHeight * 1.9 + 36),
-  );
-  const lensX = (bounds.width - lensWidth) / 2;
-  const lensY = topInset + (usableHeight - lensHeight) * 0.48;
-  const lensRadius = mobile ? 18 : 22;
-
-  context.save();
-  context.shadowColor = "rgba(0,0,0,.78)";
-  context.shadowBlur = 30;
-  context.fillStyle = "#050608";
-  roundedRectPath(context, lensX, lensY, lensWidth, lensHeight, lensRadius);
-  context.fill();
-  context.restore();
-
-  context.save();
-  roundedRectPath(context, lensX, lensY, lensWidth, lensHeight, lensRadius);
-  context.clip();
-  context.imageSmoothingEnabled = true;
-  context.imageSmoothingQuality = "high";
-  context.filter = `brightness(${state.brightness}%) contrast(${state.contrast}%)`;
-  context.drawImage(
-    dom.pageImage,
-    view.x,
-    view.y,
-    dom.pageImage.naturalWidth * view.scale,
-    dom.pageImage.naturalHeight * view.scale,
-  );
-  const focusX = view.x + region.x * view.scale;
-  const focusY = view.y + region.y * view.scale;
-  const focusWidth = region.width * view.scale;
-  const focusHeight = region.height * view.scale;
-  context.filter = "none";
-  context.strokeStyle = "rgba(216,255,72,.82)";
-  context.lineWidth = 2;
-  context.shadowColor = "rgba(216,255,72,.42)";
-  context.shadowBlur = 14;
-  context.strokeRect(focusX - 5, focusY - 5, focusWidth + 10, focusHeight + 10);
-  context.restore();
-
-  context.save();
-  context.strokeStyle = "rgba(255,255,255,.22)";
-  context.lineWidth = 1;
-  roundedRectPath(context, lensX + 0.5, lensY + 0.5, lensWidth - 1, lensHeight - 1, lensRadius);
-  context.stroke();
-  context.restore();
-}
-
-function overviewGuidedView(bounds) {
   const sourceWidth = dom.pageImage.naturalWidth;
   const sourceHeight = dom.pageImage.naturalHeight;
-  const scale = Math.min(bounds.width / sourceWidth, bounds.height / sourceHeight) * 0.96;
-  return {
-    scale,
-    x: (bounds.width - sourceWidth * scale) / 2,
-    y: (bounds.height - sourceHeight * scale) / 2,
-  };
+  const paddingX = Math.max(2, region.width * 0.02);
+  const paddingY = Math.max(2, region.height * 0.025);
+  const cropX = Math.max(0, region.x - paddingX);
+  const cropY = Math.max(0, region.y - paddingY);
+  const cropWidth = Math.min(sourceWidth - cropX, region.width + paddingX * 2);
+  const cropHeight = Math.min(sourceHeight - cropY, region.height + paddingY * 2);
+  const aspect = cropWidth / cropHeight;
+
+  const minWidth = mobile ? Math.min(210, bounds.width - 20) : 240;
+  const maxWidth = bounds.width * (mobile ? 0.86 : 0.5);
+  const maxHeight = bounds.height * (mobile ? 0.44 : 0.52);
+  let displayWidth = Math.min(maxWidth, Math.max(minWidth, placed.width * (mobile ? 2.25 : 2)));
+  let displayHeight = displayWidth / aspect;
+  if (displayHeight > maxHeight) {
+    displayHeight = maxHeight;
+    displayWidth = displayHeight * aspect;
+  }
+
+  const centerX = placed.left + placed.width / 2;
+  const centerY = placed.top + placed.height / 2;
+  const sideMargin = mobile ? 10 : 18;
+  const topInset = mobile ? 58 : 64;
+  const bottomInset = mobile ? 70 : 82;
+  const left = Math.max(sideMargin, Math.min(bounds.width - displayWidth - sideMargin, centerX - displayWidth / 2));
+  const top = Math.max(topInset, Math.min(bounds.height - displayHeight - bottomInset, centerY - displayHeight / 2));
+
+  const dpr = Math.min(mobile ? 1.5 : 2, devicePixelRatio || 1);
+  const canvas = dom.guidedCanvas;
+  canvas.width = Math.max(1, Math.round(displayWidth * dpr));
+  canvas.height = Math.max(1, Math.round(displayHeight * dpr));
+  canvas.style.left = `${left}px`;
+  canvas.style.top = `${top}px`;
+  canvas.style.width = `${displayWidth}px`;
+  canvas.style.height = `${displayHeight}px`;
+  const context = canvas.getContext("2d", { alpha: false });
+  context.setTransform(dpr, 0, 0, dpr, 0, 0);
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.fillStyle = "#fff";
+  context.fillRect(0, 0, displayWidth, displayHeight);
+  context.filter = `brightness(${state.brightness}%) contrast(${state.contrast}%)`;
+  context.drawImage(dom.pageImage, cropX, cropY, cropWidth, cropHeight, 0, 0, displayWidth, displayHeight);
+  canvas.hidden = false;
+
+  if (options.animate !== false && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    canvas.classList.remove("is-popping");
+    void canvas.offsetWidth;
+    canvas.classList.add("is-popping");
+  }
 }
 
-function drawGuidedRegion(options = {}) {
-  if (!state.guidedActive || !state.guidedRegions.length) return;
-  const region = state.guidedRegions[state.guidedRegionIndex];
-  const bounds = dom.guidedLayer.getBoundingClientRect();
-  const target = calculateGuidedViewport(
-    dom.pageImage.naturalWidth,
-    dom.pageImage.naturalHeight,
-    bounds.width,
-    bounds.height,
-    region,
-    { mobile: isMobileLayout() },
-  );
-  const start = state.guidedView || overviewGuidedView(bounds);
-  const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const duration = options.animate === false || reducedMotion ? 0 : 320;
-  const startedAt = performance.now();
-  cancelAnimationFrame(state.guidedAnimationFrame);
-
-  const frame = (now) => {
-    const progress = duration ? Math.min(1, (now - startedAt) / duration) : 1;
-    const eased = 1 - (1 - progress) ** 3;
-    const view = {
-      scale: start.scale + (target.scale - start.scale) * eased,
-      x: start.x + (target.x - start.x) * eased,
-      y: start.y + (target.y - start.y) * eased,
-    };
-    paintGuidedView(view, region);
-    if (progress < 1) state.guidedAnimationFrame = requestAnimationFrame(frame);
-    else {
-      state.guidedAnimationFrame = null;
-      state.guidedView = target;
-    }
-  };
-  state.guidedAnimationFrame = requestAnimationFrame(frame);
-
-  dom.guidedCounter.textContent = `${state.guidedRegionIndex + 1} de ${state.guidedRegions.length}`;
-  dom.guidedHelp.textContent = state.guidedRegionIndex + 1 === state.guidedRegions.length
-    ? "Última fala desta página · a arte ao redor continua visível"
-    : "A página continua inteira · avance para aproximar a próxima fala";
+function selectGuidedRegion(index, options = {}) {
+  if (!state.guidedActive || !state.guidedRegions[index]) return;
+  state.guidedRegionIndex = index;
+  $$(".guided-hotspot", dom.guidedHotspots).forEach((button, buttonIndex) => {
+    button.classList.toggle("active", buttonIndex === index);
+    button.setAttribute("aria-pressed", String(buttonIndex === index));
+  });
+  drawGuidedBubble(index, options);
+  dom.guidedCounter.textContent = `${index + 1} de ${state.guidedRegions.length}`;
+  dom.guidedHelp.textContent = index === state.guidedRegions.length - 1
+    ? "Última fala desta página"
+    : "Toque no balão ampliado para seguir";
 }
 
 async function nextGuidedRegion() {
   if (!state.guidedActive) return startGuidedMode();
+  if (state.guidedRegionIndex < 0) {
+    selectGuidedRegion(0);
+    return;
+  }
   if (state.guidedRegionIndex < state.guidedRegions.length - 1) {
-    state.guidedRegionIndex += 1;
-    drawGuidedRegion();
+    selectGuidedRegion(state.guidedRegionIndex + 1);
     return;
   }
   if (state.pageIndex >= state.pageCount - 1) {
@@ -1063,23 +1063,29 @@ async function nextGuidedRegion() {
   closeGuidedMode();
   await setPage(state.pageIndex + 1);
   await startGuidedMode();
+  if (state.guidedActive) selectGuidedRegion(0);
 }
 
 function previousGuidedRegion() {
   if (!state.guidedActive) return;
+  if (state.guidedRegionIndex < 0) {
+    selectGuidedRegion(state.guidedRegions.length - 1);
+    return;
+  }
   if (state.guidedRegionIndex > 0) {
-    state.guidedRegionIndex -= 1;
-    drawGuidedRegion();
+    selectGuidedRegion(state.guidedRegionIndex - 1);
   }
 }
 
 function closeGuidedMode() {
-  cancelAnimationFrame(state.guidedAnimationFrame);
-  state.guidedAnimationFrame = null;
-  state.guidedView = null;
+  cancelAnimationFrame(state.guidedLayoutFrame);
+  state.guidedLayoutFrame = null;
   state.guidedActive = false;
   state.guidedRegions = [];
-  state.guidedRegionIndex = 0;
+  state.guidedRegionIndex = -1;
+  dom.guidedHotspots.replaceChildren();
+  dom.guidedCanvas.hidden = true;
+  dom.guidedCanvas.classList.remove("is-popping");
   dom.guidedLayer.hidden = true;
   dom.emptyDetection.hidden = true;
   dom.guidedButton.classList.remove("active");
@@ -1164,12 +1170,16 @@ function manualPointerUp(event) {
   state.guidedRegions = regions;
   state.guidedRegionIndex = regions.indexOf(region);
   state.guidedActive = true;
-  state.guidedView = null;
   cancelManualRegion();
   dom.guidedLayer.hidden = false;
   dom.guidedButton.classList.add("active");
-  dom.guidedButtonLabel.textContent = "Próxima fala";
-  drawGuidedRegion();
+  dom.guidedButtonLabel.textContent = "Sair do modo";
+  dom.mobileGuidedButton.classList.add("active");
+  renderGuidedHotspots();
+  requestAnimationFrame(() => {
+    positionGuidedHotspots();
+    selectGuidedRegion(state.guidedRegionIndex);
+  });
 }
 
 function bindEvents() {
@@ -1211,10 +1221,15 @@ function bindEvents() {
   dom.zoomOutButton.addEventListener("click", () => setZoom(state.zoom - 0.2));
   dom.zoomInButton.addEventListener("click", () => setZoom(state.zoom + 0.2));
   dom.zoomValueButton.addEventListener("click", () => setZoom(1));
+  dom.mobileZoomOutButton.addEventListener("click", () => setZoom(state.zoom - 0.2));
+  dom.mobileZoomInButton.addEventListener("click", () => setZoom(state.zoom + 0.2));
+  dom.mobileZoomValueButton.addEventListener("click", () => setZoom(1));
   dom.fitButton.addEventListener("click", cycleFit);
   dom.rotateButton.addEventListener("click", rotatePage);
+  dom.mobileRotateButton.addEventListener("click", rotatePage);
   [dom.guidedButton, dom.mobileGuidedButton].forEach((button) => button.addEventListener("click", startGuidedMode));
   dom.fullscreenButton.addEventListener("click", toggleFullscreen);
+  dom.mobileFullscreenButton.addEventListener("click", toggleFullscreen);
   [dom.settingsButton, dom.mobileSettingsButton].forEach((button) => button.addEventListener("click", openSettings));
   [dom.closeSettingsButton, dom.settingsBackdrop].forEach((element) => element.addEventListener("click", closeSettings));
   dom.thumbnailToggle.addEventListener("click", () => dom.thumbnailRail.classList.toggle("collapsed"));
@@ -1248,9 +1263,12 @@ function bindEvents() {
   dom.guidedNextButton.addEventListener("click", nextGuidedRegion);
   dom.manualRegionButton.addEventListener("click", startManualRegion);
   dom.startManualButton.addEventListener("click", startManualRegion);
-  dom.guidedCanvas.addEventListener("click", (event) => {
-    if (event.clientX < innerWidth * 0.35) previousGuidedRegion();
-    else nextGuidedRegion();
+  dom.guidedCanvas.addEventListener("click", nextGuidedRegion);
+  dom.guidedCanvas.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      nextGuidedRegion();
+    }
   });
   dom.readerViewport.addEventListener("pointerdown", manualPointerDown);
   dom.readerViewport.addEventListener("pointermove", manualPointerMove);
@@ -1303,13 +1321,14 @@ function bindEvents() {
   }, { passive: true });
 
   dom.readerViewport.addEventListener("dblclick", () => setZoom(state.zoom > 1.1 ? 1 : 2.25));
-  dom.readerViewport.addEventListener("scroll", scheduleScrollPositionUpdate, { passive: true });
+  dom.readerViewport.addEventListener("scroll", () => {
+    scheduleScrollPositionUpdate();
+    queueGuidedLayout();
+  }, { passive: true });
   dom.readerView.addEventListener("pointermove", resetControlsTimer);
   dom.readerView.addEventListener("pointerdown", resetControlsTimer);
   const redrawGuidedAfterResize = () => {
-    if (!state.guidedActive) return;
-    state.guidedView = null;
-    drawGuidedRegion({ animate: false });
+    queueGuidedLayout();
   };
   addEventListener("resize", redrawGuidedAfterResize);
   window.visualViewport?.addEventListener("resize", redrawGuidedAfterResize);
@@ -1323,10 +1342,17 @@ function bindEvents() {
       return;
     }
     if (event.key.toLowerCase() === "f") { event.preventDefault(); startGuidedMode(); }
-    else if (event.key === "ArrowRight") state.direction === "ltr" ? nextPage() : previousPage();
-    else if (event.key === "ArrowLeft") state.direction === "ltr" ? previousPage() : nextPage();
-    else if (event.key === "PageDown" || event.key === " ") { event.preventDefault(); nextPage(); }
-    else if (event.key === "PageUp") previousPage();
+    else if (event.key === "ArrowRight") state.direction === "ltr"
+      ? (state.guidedActive ? nextGuidedRegion() : nextPage())
+      : (state.guidedActive ? previousGuidedRegion() : previousPage());
+    else if (event.key === "ArrowLeft") state.direction === "ltr"
+      ? (state.guidedActive ? previousGuidedRegion() : previousPage())
+      : (state.guidedActive ? nextGuidedRegion() : nextPage());
+    else if (event.key === "PageDown" || event.key === " ") {
+      event.preventDefault();
+      state.guidedActive ? nextGuidedRegion() : nextPage();
+    }
+    else if (event.key === "PageUp") state.guidedActive ? previousGuidedRegion() : previousPage();
     else if (event.key === "+" || event.key === "=") setZoom(state.zoom + 0.2);
     else if (event.key === "-") setZoom(state.zoom - 0.2);
     else if (event.key === "0") setZoom(1);

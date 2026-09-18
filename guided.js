@@ -1,7 +1,8 @@
 /**
  * Detecção local de áreas de fala.
- * A análise privilegia regiões claras fechadas com traços escuros (balões)
- * e usa blocos de texto como alternativa. Nenhum pixel sai do navegador.
+ * A análise aceita apenas regiões claras fechadas com traços escuros (balões).
+ * Blocos soltos e onomatopeias ficam fora do modo automático. Nenhum pixel
+ * sai do navegador.
  */
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -258,7 +259,7 @@ function findLightBubbles(data, width, height) {
     const marks = inspectDarkMarks(data, width, height, { x: minX, y: minY, width: boxWidth, height: boxHeight });
     if (
       marks.density < 0.006 ||
-      marks.density > 0.34 ||
+      marks.density > 0.48 ||
       marks.rowsWithInk < 2 ||
       marks.columnsWithInk < 3
     ) continue;
@@ -380,8 +381,11 @@ export async function detectSpeechRegions(image, direction = "ltr") {
   await new Promise((resolve) => requestAnimationFrame(resolve));
   const { data } = context.getImageData(0, 0, width, height);
   const bubbles = findLightBubbles(data, width, height);
-  const textBlocks = bubbles.length >= 2 ? [] : findTextBlocks(data, width, height);
-  const combined = deduplicate([...bubbles, ...textBlocks])
+  // Only enclosed, light speech balloons enter the automatic mode. Broad text
+  // blocks are deliberately ignored so sound effects and artwork lettering do
+  // not become tappable targets. Non-standard balloons remain available through
+  // the manual selection tool.
+  const combined = deduplicate(bubbles)
     .slice(0, 36)
     .map((region) => normalizeRegion(region, scale, sourceWidth, sourceHeight));
 
