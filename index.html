@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#090b10" />
+    <meta name="description" content="Leitor privado de CBR, CBZ, PDF e imagens com zoom guiado de falas." />
+    <title>Balão — Leitor de quadrinhos</title>
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <section id="homeView" class="home-view">
+        <header class="home-header">
+          <a class="brand" href="./" aria-label="Balão — início">
+            <span class="brand-mark" aria-hidden="true">
+              <svg viewBox="0 0 32 32"><path d="M6.5 5.5h19v15h-9.7l-6 5v-5H6.5z"/></svg>
+            </span>
+            <span>balão</span>
+          </a>
+
+          <div class="home-header-actions">
+            <span class="privacy-pill">
+              <span class="privacy-dot" aria-hidden="true"></span>
+              Arquivos ficam no seu aparelho
+            </span>
+            <button id="themeButton" class="icon-button" type="button" aria-label="Alternar tema" title="Alternar tema">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a7 7 0 1 0 7 7c0-.5-.1-1-.2-1.5A8.5 8.5 0 1 1 12 3Z"/></svg>
+            </button>
+          </div>
+        </header>
+
+        <main class="home-main">
+          <section class="hero-grid" aria-labelledby="heroTitle">
+            <div class="hero-copy">
+              <p class="eyebrow"><span>01</span> LEITOR LOCAL &amp; PRIVADO</p>
+              <h1 id="heroTitle">Leia no seu ritmo.<br /><em>Enxergue cada fala.</em></h1>
+              <p class="hero-text">
+                Abra seu quadrinho e comece a ler. O Modo Falas encontra os balões,
+                aproxima o texto e avança na ordem certa — sem enviar nada para a internet.
+              </p>
+
+              <div class="hero-signals" aria-label="Recursos principais">
+                <span><strong>CBR</strong></span>
+                <span><strong>CBZ</strong></span>
+                <span><strong>PDF</strong></span>
+                <span>JPG · PNG · WEBP</span>
+              </div>
+            </div>
+
+            <div id="dropZone" class="drop-zone" tabindex="0" role="button" aria-controls="fileInput">
+              <div class="drop-visual" aria-hidden="true">
+                <span class="bubble bubble-back"></span>
+                <span class="bubble bubble-front">
+                  <svg viewBox="0 0 48 48"><path d="M13 16h22M13 23h17M13 30h12"/></svg>
+                </span>
+                <span class="focus-ring"></span>
+              </div>
+              <div class="drop-copy">
+                <span class="drop-kicker">PRONTO PARA LER</span>
+                <h2>Solte seu quadrinho aqui</h2>
+                <p>ou escolha um arquivo no aparelho</p>
+              </div>
+              <button id="openButton" class="primary-button" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M5 13v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5"/></svg>
+                Abrir quadrinho
+              </button>
+              <small>CBR, CBZ, ZIP, PDF ou imagens · até o limite do seu aparelho</small>
+            </div>
+          </section>
+
+          <section class="feature-strip" aria-label="Destaques do leitor">
+            <article class="feature-card feature-main">
+              <div class="feature-index">01</div>
+              <div class="feature-icon speech-icon" aria-hidden="true">
+                <svg viewBox="0 0 40 40"><path d="M7 8h26v19H19l-7 6v-6H7z"/><path d="M13 15h14M13 20h9"/></svg>
+              </div>
+              <div>
+                <span class="new-badge">EXCLUSIVO</span>
+                <h3>Modo Falas</h3>
+                <p>Zoom inteligente que acompanha cada balão de texto.</p>
+              </div>
+            </article>
+
+            <article class="feature-card">
+              <div class="feature-index">02</div>
+              <div class="feature-icon" aria-hidden="true">
+                <svg viewBox="0 0 40 40"><rect x="6" y="7" width="12" height="26" rx="1"/><rect x="22" y="7" width="12" height="26" rx="1"/></svg>
+              </div>
+              <div><h3>Seu jeito de ler</h3><p>Página única, dupla, rolagem e modo mangá.</p></div>
+            </article>
+
+            <article class="feature-card">
+              <div class="feature-index">03</div>
+              <div class="feature-icon" aria-hidden="true">
+                <svg viewBox="0 0 40 40"><path d="M20 5 7 10v9c0 8 5.5 13.5 13 16 7.5-2.5 13-8 13-16v-9z"/><path d="m14 20 4 4 8-9"/></svg>
+              </div>
+              <div><h3>Privado de verdade</h3><p>Leitura local, sem cadastro, anúncios ou upload.</p></div>
+            </article>
+          </section>
+
+          <section class="library-section" aria-labelledby="libraryTitle">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow"><span>02</span> SUA ESTANTE</p>
+                <h2 id="libraryTitle">Continuar lendo</h2>
+              </div>
+              <button id="clearHistoryButton" class="text-button" type="button" hidden>Limpar histórico</button>
+            </div>
+            <div id="recentGrid" class="recent-grid"></div>
+          </section>
+        </main>
+
+        <footer class="home-footer">
+          <span>Balão Reader</span>
+          <span>Feito para olhos cansados e histórias enormes.</span>
+          <span>Funciona offline</span>
+        </footer>
+      </section>
+
+      <section id="readerView" class="reader-view" hidden aria-label="Leitor de quadrinhos">
+        <header class="reader-header">
+          <button id="closeReaderButton" class="reader-logo" type="button" aria-label="Fechar quadrinho e voltar">
+            <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M6.5 5.5h19v15h-9.7l-6 5v-5H6.5z"/></svg></span>
+            <span class="reader-brand-word">balão</span>
+          </button>
+
+          <div class="book-title-block">
+            <strong id="bookTitle">Quadrinho</strong>
+            <span id="bookMeta">CBR · leitura local</span>
+          </div>
+
+          <div class="reader-center-controls" aria-label="Controles de visualização">
+            <button id="zoomOutButton" class="tool-button" type="button" aria-label="Diminuir zoom">
+              <svg viewBox="0 0 24 24"><path d="M6 12h12"/></svg>
+            </button>
+            <button id="zoomValueButton" class="zoom-value" type="button" title="Restaurar zoom">100%</button>
+            <button id="zoomInButton" class="tool-button" type="button" aria-label="Aumentar zoom">
+              <svg viewBox="0 0 24 24"><path d="M12 6v12M6 12h12"/></svg>
+            </button>
+            <span class="tool-separator"></span>
+            <button id="fitButton" class="tool-button tool-button-wide" type="button" aria-label="Alternar ajuste da página">
+              <svg viewBox="0 0 24 24"><path d="M8 4H4v4M16 4h4v4M8 20H4v-4M16 20h4v-4"/></svg>
+              <span id="fitLabel">Ajustar</span>
+            </button>
+          </div>
+
+          <div class="reader-actions">
+            <button id="guidedButton" class="guided-button" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H11l-4 3v-3H4z"/><path d="M8 9h8M8 12h5"/></svg>
+              <span id="guidedButtonLabel">Modo Falas</span>
+              <kbd>F</kbd>
+            </button>
+            <button id="fullscreenButton" class="tool-button" type="button" aria-label="Tela cheia">
+              <svg viewBox="0 0 24 24"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg>
+            </button>
+            <button id="settingsButton" class="tool-button" type="button" aria-label="Configurações">
+              <svg viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg>
+            </button>
+          </div>
+        </header>
+
+        <div class="reader-body">
+          <aside id="thumbnailRail" class="thumbnail-rail" aria-label="Miniaturas das páginas">
+            <button id="thumbnailToggle" class="rail-toggle" type="button" aria-label="Ocultar miniaturas">
+              <svg viewBox="0 0 24 24"><path d="m15 6-6 6 6 6"/></svg>
+            </button>
+            <div id="thumbnailList" class="thumbnail-list"></div>
+          </aside>
+
+          <main id="readerViewport" class="reader-viewport" tabindex="0">
+            <div id="pageStage" class="page-stage fit-page">
+              <div class="page-shell page-shell-primary">
+                <img id="pageImage" class="page-image" alt="Página atual do quadrinho" draggable="false" />
+                <div id="manualSelection" class="manual-selection" hidden></div>
+              </div>
+              <div id="secondPageShell" class="page-shell page-shell-secondary" hidden>
+                <img id="secondPageImage" class="page-image" alt="Segunda página do quadrinho" draggable="false" />
+              </div>
+            </div>
+            <div id="scrollPages" class="scroll-pages" hidden></div>
+
+            <button id="previousPageZone" class="page-zone page-zone-previous" type="button" aria-label="Página anterior">
+              <svg viewBox="0 0 24 24"><path d="m15 5-7 7 7 7"/></svg>
+            </button>
+            <button id="nextPageZone" class="page-zone page-zone-next" type="button" aria-label="Próxima página">
+              <svg viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></svg>
+            </button>
+
+            <div id="guidedLayer" class="guided-layer" hidden>
+              <canvas id="guidedCanvas" aria-label="Fala ampliada"></canvas>
+              <div class="guided-topbar">
+                <div class="guided-status">
+                  <span class="guided-pulse" aria-hidden="true"></span>
+                  <span>Modo Falas</span>
+                  <strong id="guidedCounter">1 de 1</strong>
+                </div>
+                <button id="closeGuidedButton" class="guided-close" type="button" aria-label="Sair do Modo Falas">
+                  <svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg>
+                </button>
+              </div>
+              <div class="guided-help" id="guidedHelp">Toque à direita ou use o botão para a próxima fala</div>
+              <div class="guided-controls">
+                <button id="guidedPreviousButton" class="guided-secondary" type="button">
+                  <svg viewBox="0 0 24 24"><path d="m15 5-7 7 7 7"/></svg>
+                  Anterior
+                </button>
+                <button id="manualRegionButton" class="guided-secondary" type="button">
+                  <svg viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg>
+                  Escolher área
+                </button>
+                <button id="guidedNextButton" class="guided-primary" type="button">
+                  Próxima fala
+                  <svg viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></svg>
+                </button>
+              </div>
+            </div>
+
+            <div id="emptyDetection" class="detection-message" hidden role="status">
+              <div class="feature-icon speech-icon" aria-hidden="true"><svg viewBox="0 0 40 40"><path d="M7 8h26v19H19l-7 6v-6H7z"/><path d="M13 15h14M13 20h9"/></svg></div>
+              <div><strong>Não encontrei um balão com segurança.</strong><span>Você pode marcar a fala arrastando sobre ela.</span></div>
+              <button id="startManualButton" type="button">Marcar fala</button>
+            </div>
+          </main>
+
+          <aside class="quick-rail" aria-label="Modo de leitura">
+            <span class="quick-label">EXIBIÇÃO</span>
+            <button class="quick-button active" type="button" data-view-mode="single" aria-label="Página única" title="Página única">
+              <svg viewBox="0 0 24 24"><rect x="6" y="3" width="12" height="18" rx="1"/></svg>
+            </button>
+            <button class="quick-button" type="button" data-view-mode="double" aria-label="Página dupla" title="Página dupla">
+              <svg viewBox="0 0 24 24"><rect x="3" y="4" width="8" height="16" rx="1"/><rect x="13" y="4" width="8" height="16" rx="1"/></svg>
+            </button>
+            <button class="quick-button" type="button" data-view-mode="scroll" aria-label="Rolagem vertical" title="Rolagem vertical">
+              <svg viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="7" rx="1"/><rect x="5" y="14" width="14" height="7" rx="1"/><path d="m9 12 3 2 3-2"/></svg>
+            </button>
+            <span class="quick-divider"></span>
+            <button id="rotateButton" class="quick-button" type="button" aria-label="Girar página" title="Girar página">
+              <svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg>
+            </button>
+          </aside>
+        </div>
+
+        <footer class="reader-footer">
+          <button id="footerPreviousButton" class="footer-nav-button" type="button" aria-label="Página anterior">
+            <svg viewBox="0 0 24 24"><path d="m15 5-7 7 7 7"/></svg>
+          </button>
+          <div class="progress-wrap">
+            <span id="footerCurrentPage">1</span>
+            <input id="pageSlider" type="range" min="1" max="1" value="1" aria-label="Ir para a página" />
+            <span id="footerTotalPages">1</span>
+          </div>
+          <button id="footerNextButton" class="footer-nav-button" type="button" aria-label="Próxima página">
+            <svg viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></svg>
+          </button>
+        </footer>
+
+        <nav class="mobile-dock" aria-label="Controles móveis">
+          <button id="mobilePreviousButton" type="button"><svg viewBox="0 0 24 24"><path d="m15 5-7 7 7 7"/></svg><span>Anterior</span></button>
+          <button id="mobileThumbsButton" type="button"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6"/><rect x="14" y="4" width="6" height="6"/><rect x="4" y="14" width="6" height="6"/><rect x="14" y="14" width="6" height="6"/></svg><span>Páginas</span></button>
+          <button id="mobileGuidedButton" class="mobile-guided" type="button"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H11l-4 3v-3H4z"/><path d="M8 9h8M8 12h5"/></svg><span>Falas</span></button>
+          <button id="mobileNextButton" type="button"><svg viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></svg><span>Próxima</span></button>
+          <button id="mobileSettingsButton" type="button"><svg viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19 12h3M2 12h3M12 2v3M12 19v3"/></svg><span>Ajustes</span></button>
+        </nav>
+
+        <div id="settingsBackdrop" class="sheet-backdrop" hidden></div>
+        <aside id="settingsSheet" class="settings-sheet" aria-labelledby="settingsTitle" hidden>
+          <div class="sheet-handle" aria-hidden="true"></div>
+          <div class="sheet-header">
+            <div><span>LEITURA</span><h2 id="settingsTitle">Ajustes</h2></div>
+            <button id="closeSettingsButton" class="icon-button" type="button" aria-label="Fechar ajustes"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+          </div>
+
+          <fieldset class="setting-group">
+            <legend>Modo de exibição</legend>
+            <div class="segmented-control segmented-three">
+              <button class="active" type="button" data-view-mode="single">Uma página</button>
+              <button type="button" data-view-mode="double">Duas páginas</button>
+              <button type="button" data-view-mode="scroll">Rolagem</button>
+            </div>
+          </fieldset>
+
+          <fieldset class="setting-group">
+            <legend>Direção da leitura</legend>
+            <div class="segmented-control">
+              <button id="directionLtr" class="active" type="button">Ocidental →</button>
+              <button id="directionRtl" type="button">← Mangá</button>
+            </div>
+          </fieldset>
+
+          <fieldset class="setting-group">
+            <legend>Ajuste da página</legend>
+            <div class="segmented-control segmented-three">
+              <button class="active" type="button" data-fit="page">Página</button>
+              <button type="button" data-fit="width">Largura</button>
+              <button type="button" data-fit="original">Original</button>
+            </div>
+          </fieldset>
+
+          <div class="setting-group sliders-group">
+            <label for="brightnessSlider"><span>Brilho</span><output id="brightnessOutput">100%</output></label>
+            <input id="brightnessSlider" type="range" min="60" max="140" value="100" />
+            <label for="contrastSlider"><span>Contraste</span><output id="contrastOutput">100%</output></label>
+            <input id="contrastSlider" type="range" min="60" max="160" value="100" />
+          </div>
+
+          <div class="setting-row">
+            <div><strong>Interface automática</strong><span>Esconde os controles durante a leitura</span></div>
+            <button id="autoHideToggle" class="switch active" type="button" role="switch" aria-checked="true"><span></span></button>
+          </div>
+
+          <div class="shortcut-card">
+            <span>ATALHOS</span>
+            <div><kbd>←</kbd><kbd>→</kbd> páginas</div>
+            <div><kbd>F</kbd> Modo Falas</div>
+            <div><kbd>+ −</kbd> zoom</div>
+          </div>
+        </aside>
+      </section>
+
+      <input id="fileInput" class="visually-hidden" type="file" accept=".cbr,.cbz,.rar,.zip,.pdf,image/jpeg,image/png,image/webp,image/avif" multiple />
+
+      <div id="loadingOverlay" class="loading-overlay" hidden role="status" aria-live="polite">
+        <div class="loader-orbit"><span></span></div>
+        <strong id="loadingTitle">Abrindo seu quadrinho…</strong>
+        <span id="loadingDetail">Lendo as páginas no seu aparelho</span>
+        <div class="loading-track"><span id="loadingBar"></span></div>
+      </div>
+
+      <div id="toastRegion" class="toast-region" aria-live="polite"></div>
+    </div>
+
+    <script src="./vendor/unarchiver/unarchiver.min.js"></script>
+    <script>window.LocalUnarchiver = Unarchiver;</script>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

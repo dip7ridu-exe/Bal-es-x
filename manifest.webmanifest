@@ -1,0 +1,19 @@
+{
+  "name": "Balão — Leitor de quadrinhos",
+  "short_name": "Balão",
+  "description": "Leitor privado de CBR, CBZ, PDF e imagens com zoom guiado de falas.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#090b10",
+  "theme_color": "#090b10",
+  "icons": [
+    {
+      "src": "./favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
