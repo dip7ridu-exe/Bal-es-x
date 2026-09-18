@@ -104,6 +104,7 @@ svg {
 /* Home */
 .home-view {
   min-height: 100vh;
+  min-height: 100svh;
   background:
     radial-gradient(circle at 83% 8%, rgba(117, 232, 255, 0.09), transparent 26rem),
     linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
@@ -706,6 +707,10 @@ svg {
 .reader-view {
   position: fixed;
   inset: 0;
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
   z-index: 20;
   display: grid;
   grid-template-rows: var(--header-h) minmax(0, 1fr) var(--footer-h);
@@ -982,6 +987,12 @@ svg {
     radial-gradient(circle at center, rgba(255, 255, 255, 0.035), transparent 35rem),
     var(--reader-bg);
   scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+  touch-action: pan-x pan-y;
+  -webkit-overflow-scrolling: touch;
+}
+
+.reader-viewport.scroll-mode {
+  touch-action: pan-y pinch-zoom;
 }
 
 .reader-viewport.manual-mode {
@@ -1042,6 +1053,7 @@ svg {
 
 .fit-page .page-image {
   max-height: calc(100vh - var(--header-h) - var(--footer-h) - 56px);
+  max-height: calc(100dvh - var(--header-h) - var(--footer-h) - 56px);
 }
 
 .fit-width {
@@ -1073,6 +1085,7 @@ svg {
 
 .page-stage.double-mode .page-image {
   max-height: calc(100vh - var(--header-h) - var(--footer-h) - 56px);
+  max-height: calc(100dvh - var(--header-h) - var(--footer-h) - 56px);
 }
 
 .page-zone {
@@ -1110,21 +1123,26 @@ svg {
 .scroll-pages {
   width: 100%;
   padding: 20px 8px 70px;
+  overflow-anchor: none;
 }
 
 .scroll-page-shell {
+  aspect-ratio: var(--page-aspect, 0.6667);
   width: min(100%, 1000px);
-  min-height: 240px;
+  min-height: 0;
   margin: 0 auto 8px;
   display: grid;
   place-items: center;
+  overflow: hidden;
+  contain: layout paint;
   background: rgba(255, 255, 255, 0.025);
 }
 
 .scroll-page-shell img {
   width: 100%;
-  height: auto;
+  height: 100%;
   display: block;
+  object-fit: contain;
   filter: brightness(var(--brightness, 1)) contrast(var(--contrast, 1));
 }
 
@@ -1230,12 +1248,14 @@ input[type="range"]::-moz-range-thumb {
   overflow: hidden;
   background: #040506;
   color: white;
+  isolation: isolate;
 }
 
 .guided-layer canvas {
   width: 100%;
   height: 100%;
   display: block;
+  touch-action: manipulation;
 }
 
 .guided-topbar {
@@ -1748,10 +1768,10 @@ kbd {
   }
 }
 
-@media (max-width: 760px) {
+@media (max-width: 760px), (hover: none) and (pointer: coarse) and (max-width: 1024px) {
   :root {
-    --header-h: 58px;
-    --footer-h: 74px;
+    --header-h: calc(58px + env(safe-area-inset-top));
+    --footer-h: calc(68px + env(safe-area-inset-bottom));
   }
 
   .home-view {
@@ -1861,7 +1881,7 @@ kbd {
   }
 
   .reader-header {
-    padding: 0 11px;
+    padding: env(safe-area-inset-top) 11px 0;
     gap: 9px;
   }
 
@@ -2019,6 +2039,7 @@ kbd {
   .fit-page .page-image,
   .page-stage.double-mode .page-image {
     max-height: calc(100vh - var(--header-h) - var(--footer-h) - 28px);
+    max-height: calc(100dvh - var(--header-h) - var(--footer-h) - 28px);
   }
 
   .scroll-pages {
@@ -2102,7 +2123,7 @@ kbd {
 
 @media (max-width: 430px) {
   .hero-copy h1 {
-    font-size: 3.35rem;
+    font-size: clamp(2.65rem, 14vw, 3.35rem);
   }
 
   .hero-text {

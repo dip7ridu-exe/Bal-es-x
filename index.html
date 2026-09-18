@@ -8,7 +8,7 @@
     <title>Balão — Leitor de quadrinhos</title>
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <link rel="manifest" href="./manifest.webmanifest" />
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?v=2-mobile" />
   </head>
   <body>
     <div id="app">
@@ -190,7 +190,7 @@
             </button>
 
             <div id="guidedLayer" class="guided-layer" hidden>
-              <canvas id="guidedCanvas" aria-label="Fala ampliada"></canvas>
+              <canvas id="guidedCanvas" aria-label="Página completa com a fala atual ampliada"></canvas>
               <div class="guided-topbar">
                 <div class="guided-status">
                   <span class="guided-pulse" aria-hidden="true"></span>
@@ -201,7 +201,7 @@
                   <svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg>
                 </button>
               </div>
-              <div class="guided-help" id="guidedHelp">Toque à direita ou use o botão para a próxima fala</div>
+              <div class="guided-help" id="guidedHelp">A página continua inteira enquanto a fala é aproximada</div>
               <div class="guided-controls">
                 <button id="guidedPreviousButton" class="guided-secondary" type="button">
                   <svg viewBox="0 0 24 24"><path d="m15 5-7 7 7 7"/></svg>
@@ -334,6 +334,6 @@
 
     <script src="./vendor/unarchiver/unarchiver.min.js"></script>
     <script>window.LocalUnarchiver = Unarchiver;</script>
-    <script type="module" src="./app.js"></script>
+    <script type="module" src="./app.js?v=2-mobile"></script>
   </body>
 </html>

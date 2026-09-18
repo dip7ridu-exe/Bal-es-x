@@ -1,10 +1,10 @@
-const CACHE_NAME = "balao-reader-v1";
+const CACHE_NAME = "balao-reader-v2-mobile";
 const CORE_FILES = [
   "./",
   "./index.html",
-  "./styles.css",
-  "./app.js",
-  "./guided.js",
+  "./styles.css?v=2-mobile",
+  "./app.js?v=2-mobile",
+  "./guided.js?v=2-mobile",
   "./favicon.svg",
   "./manifest.webmanifest",
   "./vendor/pdfjs/pdf.mjs",
@@ -29,13 +29,30 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
+  const url = new URL(event.request.url);
+  if (url.origin !== self.location.origin) return;
+
+  const updateCache = async (response) => {
+    if (response.ok) {
+      const cache = await caches.open(CACHE_NAME);
+      await cache.put(event.request, response.clone());
+    }
+    return response;
+  };
+
+  const networkFirst = event.request.mode === "navigate"
+    || ["script", "style", "document"].includes(event.request.destination);
+
+  if (networkFirst) {
+    event.respondWith(
+      fetch(event.request)
+        .then(updateCache)
+        .catch(async () => (await caches.match(event.request)) || caches.match("./index.html")),
+    );
+    return;
+  }
+
   event.respondWith(
-    caches.match(event.request).then((cached) => cached || fetch(event.request).then((response) => {
-      if (response.ok && new URL(event.request.url).origin === self.location.origin) {
-        const copy = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
-      }
-      return response;
-    })),
+    caches.match(event.request).then((cached) => cached || fetch(event.request).then(updateCache)),
   );
 });

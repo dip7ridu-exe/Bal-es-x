@@ -38,17 +38,89 @@ function normalizeRegion(region, scale, sourceWidth, sourceHeight) {
 
 function sortReadingOrder(regions, direction = "ltr") {
   if (regions.length < 2) return regions;
-  const medianHeight = [...regions].map((item) => item.height).sort((a, b) => a - b)[Math.floor(regions.length / 2)];
-  const rowTolerance = Math.max(28, medianHeight * 0.58);
+  const orderedByTop = [...regions].sort((a, b) => a.y - b.y || a.x - b.x);
+  const medianHeight = [...regions]
+    .map((item) => item.height)
+    .sort((a, b) => a - b)[Math.floor(regions.length / 2)];
+  const rows = [];
 
-  return [...regions].sort((a, b) => {
-    const centerAY = a.y + a.height / 2;
-    const centerBY = b.y + b.height / 2;
-    if (Math.abs(centerAY - centerBY) > rowTolerance) return centerAY - centerBY;
+  for (const region of orderedByTop) {
+    const centerY = region.y + region.height / 2;
+    let bestRow = null;
+    let bestDistance = Infinity;
+
+    for (const row of rows) {
+      const overlap = Math.max(0, Math.min(row.bottom, region.y + region.height) - Math.max(row.top, region.y));
+      const overlapRatio = overlap / Math.min(row.bottom - row.top, region.height);
+      const distance = Math.abs(centerY - row.centerY);
+      const tolerance = Math.max(24, Math.min(medianHeight, region.height) * 0.72);
+      if ((overlapRatio >= 0.26 || distance <= tolerance) && distance < bestDistance) {
+        bestRow = row;
+        bestDistance = distance;
+      }
+    }
+
+    if (!bestRow) {
+      rows.push({
+        top: region.y,
+        bottom: region.y + region.height,
+        centerY,
+        regions: [region],
+      });
+      continue;
+    }
+
+    bestRow.regions.push(region);
+    bestRow.top = Math.min(bestRow.top, region.y);
+    bestRow.bottom = Math.max(bestRow.bottom, region.y + region.height);
+    bestRow.centerY = bestRow.regions.reduce((sum, item) => sum + item.y + item.height / 2, 0) / bestRow.regions.length;
+  }
+
+  rows.sort((a, b) => a.top - b.top || a.centerY - b.centerY);
+  return rows.flatMap((row) => row.regions.sort((a, b) => {
     const centerAX = a.x + a.width / 2;
     const centerBX = b.x + b.width / 2;
     return direction === "rtl" ? centerBX - centerAX : centerAX - centerBX;
-  });
+  }));
+}
+
+export function calculateGuidedViewport(sourceWidth, sourceHeight, viewportWidth, viewportHeight, region, options = {}) {
+  if (!sourceWidth || !sourceHeight || !viewportWidth || !viewportHeight || !region) {
+    return { scale: 1, x: 0, y: 0 };
+  }
+
+  const mobile = options.mobile ?? viewportWidth <= 760;
+  const topInset = options.topInset ?? (mobile ? 58 : 54);
+  const bottomInset = options.bottomInset ?? (mobile ? 76 : 70);
+  const usableHeight = Math.max(120, viewportHeight - topInset - bottomInset);
+  const focusAreaWidth = viewportWidth * (mobile ? 0.94 : 0.8);
+  const focusAreaHeight = usableHeight * (mobile ? 0.62 : 0.58);
+  const focusAreaLeft = (viewportWidth - focusAreaWidth) / 2;
+  const focusAreaTop = topInset + (usableHeight - focusAreaHeight) * 0.48;
+  const baseScale = Math.min(viewportWidth / sourceWidth, viewportHeight / sourceHeight) * 0.96;
+  const paddedWidth = region.width * (mobile ? 1.42 : 1.62) + sourceWidth * 0.012;
+  const paddedHeight = region.height * (mobile ? 1.62 : 1.82) + sourceHeight * 0.008;
+  const targetScale = Math.min(
+    (viewportWidth * (mobile ? 0.88 : 0.76)) / paddedWidth,
+    (usableHeight * (mobile ? 0.7 : 0.66)) / paddedHeight,
+  );
+  const coverageScale = Math.max(focusAreaWidth / sourceWidth, focusAreaHeight / sourceHeight);
+  const minimumScale = Math.max(baseScale * (mobile ? 1.5 : 1.32), coverageScale);
+  const maximumScale = Math.max(minimumScale, baseScale * (mobile ? 5.2 : 4.2));
+  const scale = clamp(targetScale, minimumScale, maximumScale);
+  const pageWidth = sourceWidth * scale;
+  const pageHeight = sourceHeight * scale;
+  const focusX = region.x + region.width / 2;
+  const focusY = region.y + region.height / 2;
+  const viewportFocusX = focusAreaLeft + focusAreaWidth / 2;
+  const viewportFocusY = focusAreaTop + focusAreaHeight / 2;
+  let x = viewportFocusX - focusX * scale;
+  let y = viewportFocusY - focusY * scale;
+
+  x = clamp(x, focusAreaLeft + focusAreaWidth - pageWidth, focusAreaLeft);
+  y = clamp(y, focusAreaTop + focusAreaHeight - pageHeight, focusAreaTop);
+
+  return { scale, x, y };
 }
 
 function deduplicate(regions) {

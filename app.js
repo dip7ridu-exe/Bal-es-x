@@ -1,4 +1,4 @@
-import { detectSpeechRegions, sortRegions } from "./guided.js";
+import { calculateGuidedViewport, detectSpeechRegions, sortRegions } from "./guided.js?v=2-mobile";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -6,6 +6,7 @@ const imagePattern = /\.(avif|bmp|gif|jpe?g|png|webp)$/i;
 const archivePattern = /\.(cbr|cbz|rar|zip)$/i;
 const HISTORY_KEY = "balao-reader-history-v1";
 const PREFS_KEY = "balao-reader-prefs-v1";
+const isMobileLayout = () => matchMedia("(max-width: 760px), (hover: none) and (pointer: coarse) and (max-width: 1024px)").matches;
 
 const dom = {
   homeView: $("#homeView"),
@@ -110,8 +111,12 @@ const state = {
   manualStart: null,
   pendingRecent: null,
   scrollObserver: null,
+  scrollFrame: null,
   thumbnailObserver: null,
   controlsTimer: null,
+  pageAspect: null,
+  guidedView: null,
+  guidedAnimationFrame: null,
   touch: { startX: 0, startY: 0, startTime: 0, pinchDistance: 0, pinchZoom: 1, lastTap: 0 },
 };
 
@@ -446,6 +451,7 @@ async function openFiles(fileList) {
     state.pendingRecent = null;
     state.zoom = 1;
     state.rotation = 0;
+    state.pageAspect = null;
     setLoading(true, "Montando o leitor…", `${reader.pageCount} ${reader.pageCount === 1 ? "página encontrada" : "páginas encontradas"}`, 76);
     await showReader();
     setLoading(false);
@@ -488,6 +494,7 @@ function closeReader() {
   state.pageCount = 0;
   state.guidedCache.clear();
   state.scrollObserver?.disconnect();
+  cancelAnimationFrame(state.scrollFrame);
   state.thumbnailObserver?.disconnect();
   document.body.classList.remove("reader-open");
   dom.readerView.hidden = true;
@@ -513,6 +520,7 @@ async function renderPagedView() {
   dom.pageImage.src = firstUrl;
   await imageLoaded(dom.pageImage);
   if (token !== state.renderToken) return;
+  state.pageAspect = dom.pageImage.naturalWidth / dom.pageImage.naturalHeight;
 
   const showSecond = state.viewMode === "double" && state.pageIndex + 1 < state.pageCount;
   dom.secondPageShell.hidden = !showSecond;
@@ -530,6 +538,81 @@ async function renderPagedView() {
   preloadAround(state.pageIndex);
 }
 
+async function ensurePageAspect() {
+  if (state.pageAspect || !state.reader) return;
+  const url = await state.reader.getPage(state.pageIndex);
+  const probe = new Image();
+  probe.decoding = "async";
+  probe.src = url;
+  await imageLoaded(probe);
+  state.pageAspect = probe.naturalWidth / probe.naturalHeight;
+}
+
+function loadScrollPage(shell) {
+  const image = $("img", shell);
+  const index = Number(shell.dataset.index);
+  if (image.dataset.loading === "true" || image.dataset.loaded === "true") return;
+  image.dataset.loading = "true";
+  state.reader.getPage(index).then((url) => {
+    if (!shell.isConnected || state.viewMode !== "scroll") return;
+    image.src = url;
+    image.dataset.loaded = "true";
+  }).catch(() => {
+    image.removeAttribute("src");
+  }).finally(() => {
+    image.dataset.loading = "false";
+  });
+}
+
+function unloadDistantScrollPage(shell) {
+  const index = Number(shell.dataset.index);
+  if (Math.abs(index - state.pageIndex) <= 4) return;
+  const image = $("img", shell);
+  image.removeAttribute("src");
+  delete image.dataset.loaded;
+}
+
+function updateScrollPosition() {
+  state.scrollFrame = null;
+  if (state.viewMode !== "scroll" || !state.reader) return;
+  const viewportRect = dom.readerViewport.getBoundingClientRect();
+  const readingLine = viewportRect.top + viewportRect.height * 0.42;
+  let closest = null;
+  let closestDistance = Infinity;
+
+  for (const shell of $$(".scroll-page-shell", dom.scrollPages)) {
+    const rect = shell.getBoundingClientRect();
+    const containsLine = rect.top <= readingLine && rect.bottom >= readingLine;
+    const distance = containsLine ? 0 : Math.min(Math.abs(rect.top - readingLine), Math.abs(rect.bottom - readingLine));
+    if (distance < closestDistance) {
+      closest = shell;
+      closestDistance = distance;
+      if (containsLine) break;
+    }
+  }
+
+  if (!closest) return;
+  const index = Number(closest.dataset.index);
+  if (index === state.pageIndex) return;
+  state.pageIndex = index;
+  updatePageControls();
+  scheduleHistorySave();
+}
+
+function scheduleScrollPositionUpdate() {
+  if (state.scrollFrame || state.viewMode !== "scroll") return;
+  state.scrollFrame = requestAnimationFrame(updateScrollPosition);
+}
+
+function scrollToPageShell(index, behavior = "auto") {
+  const target = $(`.scroll-page-shell[data-index="${index}"]`, dom.scrollPages);
+  if (!target) return;
+  const viewportRect = dom.readerViewport.getBoundingClientRect();
+  const targetRect = target.getBoundingClientRect();
+  const top = dom.readerViewport.scrollTop + targetRect.top - viewportRect.top;
+  dom.readerViewport.scrollTo({ left: 0, top: Math.max(0, top), behavior });
+}
+
 function buildScrollView() {
   state.scrollObserver?.disconnect();
   dom.scrollPages.replaceChildren();
@@ -538,40 +621,39 @@ function buildScrollView() {
     const shell = document.createElement("div");
     shell.className = "scroll-page-shell";
     shell.dataset.index = String(index);
+    shell.style.setProperty("--page-aspect", state.pageAspect || 2 / 3);
     const image = document.createElement("img");
     image.alt = `Página ${index + 1}`;
     image.loading = "lazy";
+    image.decoding = "async";
     shell.append(image);
     fragment.append(shell);
   }
   dom.scrollPages.append(fragment);
 
   state.scrollObserver = new IntersectionObserver((entries) => {
-    let mostVisible = null;
     for (const entry of entries) {
-      const index = Number(entry.target.dataset.index);
-      if (entry.isIntersecting) {
-        const image = $("img", entry.target);
-        if (!image.src) state.reader.getPage(index).then((url) => { image.src = url; }).catch(() => {});
-        if (!mostVisible || entry.intersectionRatio > mostVisible.intersectionRatio) mostVisible = entry;
-      }
+      if (entry.isIntersecting) loadScrollPage(entry.target);
+      else unloadDistantScrollPage(entry.target);
     }
-    if (mostVisible && state.viewMode === "scroll") {
-      state.pageIndex = Number(mostVisible.target.dataset.index);
-      updatePageControls();
-      scheduleHistorySave();
-    }
-  }, { root: dom.readerViewport, rootMargin: "120% 0px", threshold: [0.05, 0.35, 0.7] });
+  }, { root: dom.readerViewport, rootMargin: "160% 0px", threshold: 0.01 });
   $$(".scroll-page-shell", dom.scrollPages).forEach((shell) => state.scrollObserver.observe(shell));
 }
 
 async function renderScrollView() {
   dom.pageStage.hidden = true;
   dom.scrollPages.hidden = false;
+  await ensurePageAspect();
   if (!dom.scrollPages.childElementCount) buildScrollView();
+  [state.pageIndex - 1, state.pageIndex, state.pageIndex + 1]
+    .filter((index) => index >= 0 && index < state.pageCount)
+    .forEach((index) => {
+      const shell = $(`.scroll-page-shell[data-index="${index}"]`, dom.scrollPages);
+      if (shell) loadScrollPage(shell);
+    });
   requestAnimationFrame(() => {
-    const target = $(`.scroll-page-shell[data-index="${state.pageIndex}"]`, dom.scrollPages);
-    target?.scrollIntoView({ block: "start" });
+    scrollToPageShell(state.pageIndex);
+    scheduleScrollPositionUpdate();
   });
 }
 
@@ -583,8 +665,7 @@ async function setPage(index, options = {}) {
   closeGuidedMode();
   if (state.viewMode === "scroll") {
     if (!dom.scrollPages.childElementCount) await renderScrollView();
-    const target = $(`.scroll-page-shell[data-index="${state.pageIndex}"]`, dom.scrollPages);
-    target?.scrollIntoView({ behavior: options.smooth ? "smooth" : "auto", block: "start" });
+    scrollToPageShell(state.pageIndex, options.smooth ? "smooth" : "auto");
   } else {
     await renderPagedView();
     dom.readerViewport.scrollTo({ left: 0, top: 0 });
@@ -670,13 +751,16 @@ function buildThumbnails() {
 
 async function setViewMode(mode, rerender = true) {
   if (!['single', 'double', 'scroll'].includes(mode)) return;
-  if (mode === "double" && matchMedia("(max-width: 520px)").matches) {
-    toast("Página dupla funciona melhor com o celular na horizontal.");
+  if (mode === "double" && matchMedia("(max-width: 760px)").matches) {
+    mode = "single";
+    toast("No celular, a página única mantém o quadrinho legível. Gire a tela para usar página dupla.");
   }
   if (state.guidedActive) closeGuidedMode();
   state.viewMode = mode;
   state.zoom = 1;
+  state.scrollObserver?.disconnect();
   dom.scrollPages.replaceChildren();
+  dom.readerViewport.classList.toggle("scroll-mode", mode === "scroll");
   dom.pageStage.classList.toggle("manga-order", state.direction === "rtl");
   $$('[data-view-mode]').forEach((button) => button.classList.toggle("active", button.dataset.viewMode === mode));
   persistPrefs();
@@ -797,6 +881,7 @@ async function startGuidedMode() {
     state.guidedRegions = regions;
     state.guidedRegionIndex = 0;
     state.guidedActive = true;
+    state.guidedView = null;
     dom.guidedLayer.hidden = false;
     dom.guidedButton.classList.add("active");
     dom.guidedButtonLabel.textContent = "Próxima fala";
@@ -811,41 +896,156 @@ async function startGuidedMode() {
   }
 }
 
-function drawGuidedRegion() {
+function roundedRectPath(context, x, y, width, height, radius) {
+  const r = Math.min(radius, width / 2, height / 2);
+  context.beginPath();
+  context.moveTo(x + r, y);
+  context.lineTo(x + width - r, y);
+  context.quadraticCurveTo(x + width, y, x + width, y + r);
+  context.lineTo(x + width, y + height - r);
+  context.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  context.lineTo(x + r, y + height);
+  context.quadraticCurveTo(x, y + height, x, y + height - r);
+  context.lineTo(x, y + r);
+  context.quadraticCurveTo(x, y, x + r, y);
+  context.closePath();
+}
+
+function paintGuidedView(view, region) {
   if (!state.guidedActive || !state.guidedRegions.length) return;
-  const region = state.guidedRegions[state.guidedRegionIndex];
   const canvas = dom.guidedCanvas;
   const bounds = dom.guidedLayer.getBoundingClientRect();
-  const dpr = Math.min(2, devicePixelRatio || 1);
-  canvas.width = Math.max(1, Math.floor(bounds.width * dpr));
-  canvas.height = Math.max(1, Math.floor(bounds.height * dpr));
+  const dpr = Math.min(isMobileLayout() ? 1.5 : 2, devicePixelRatio || 1);
+  const pixelWidth = Math.max(1, Math.floor(bounds.width * dpr));
+  const pixelHeight = Math.max(1, Math.floor(bounds.height * dpr));
+  if (canvas.width !== pixelWidth) canvas.width = pixelWidth;
+  if (canvas.height !== pixelHeight) canvas.height = pixelHeight;
   const context = canvas.getContext("2d", { alpha: false });
   context.setTransform(dpr, 0, 0, dpr, 0, 0);
   context.fillStyle = "#040506";
   context.fillRect(0, 0, bounds.width, bounds.height);
 
-  const horizontalMargin = Math.max(18, bounds.width * 0.055);
-  const verticalMargin = Math.max(74, bounds.height * 0.12);
-  const availableWidth = bounds.width - horizontalMargin * 2;
-  const availableHeight = bounds.height - verticalMargin * 2;
-  const scale = Math.min(availableWidth / region.width, availableHeight / region.height);
-  const drawWidth = region.width * scale;
-  const drawHeight = region.height * scale;
-  const x = (bounds.width - drawWidth) / 2;
-  const y = (bounds.height - drawHeight) / 2;
+  const overview = overviewGuidedView(bounds);
+  context.save();
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.filter = `brightness(${state.brightness}%) contrast(${state.contrast}%)`;
+  context.drawImage(
+    dom.pageImage,
+    overview.x,
+    overview.y,
+    dom.pageImage.naturalWidth * overview.scale,
+    dom.pageImage.naturalHeight * overview.scale,
+  );
+  context.restore();
+  context.fillStyle = "rgba(0,0,0,.2)";
+  context.fillRect(0, 0, bounds.width, bounds.height);
+
+  const mobile = isMobileLayout();
+  const topInset = mobile ? 58 : 54;
+  const bottomInset = mobile ? 76 : 70;
+  const usableHeight = Math.max(140, bounds.height - topInset - bottomInset);
+  const lensWidth = Math.min(bounds.width - (mobile ? 20 : 44), bounds.width * (mobile ? 0.94 : 0.8));
+  const focusedHeight = region.height * view.scale;
+  const lensHeight = Math.min(
+    usableHeight * (mobile ? 0.62 : 0.58),
+    Math.max(mobile ? 176 : 210, focusedHeight * 1.9 + 36),
+  );
+  const lensX = (bounds.width - lensWidth) / 2;
+  const lensY = topInset + (usableHeight - lensHeight) * 0.48;
+  const lensRadius = mobile ? 18 : 22;
 
   context.save();
-  context.shadowColor = "rgba(0,0,0,.65)";
-  context.shadowBlur = 36;
-  context.drawImage(dom.pageImage, region.x, region.y, region.width, region.height, x, y, drawWidth, drawHeight);
+  context.shadowColor = "rgba(0,0,0,.78)";
+  context.shadowBlur = 30;
+  context.fillStyle = "#050608";
+  roundedRectPath(context, lensX, lensY, lensWidth, lensHeight, lensRadius);
+  context.fill();
   context.restore();
-  context.strokeStyle = "rgba(216,255,72,.58)";
+
+  context.save();
+  roundedRectPath(context, lensX, lensY, lensWidth, lensHeight, lensRadius);
+  context.clip();
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.filter = `brightness(${state.brightness}%) contrast(${state.contrast}%)`;
+  context.drawImage(
+    dom.pageImage,
+    view.x,
+    view.y,
+    dom.pageImage.naturalWidth * view.scale,
+    dom.pageImage.naturalHeight * view.scale,
+  );
+  const focusX = view.x + region.x * view.scale;
+  const focusY = view.y + region.y * view.scale;
+  const focusWidth = region.width * view.scale;
+  const focusHeight = region.height * view.scale;
+  context.filter = "none";
+  context.strokeStyle = "rgba(216,255,72,.82)";
+  context.lineWidth = 2;
+  context.shadowColor = "rgba(216,255,72,.42)";
+  context.shadowBlur = 14;
+  context.strokeRect(focusX - 5, focusY - 5, focusWidth + 10, focusHeight + 10);
+  context.restore();
+
+  context.save();
+  context.strokeStyle = "rgba(255,255,255,.22)";
   context.lineWidth = 1;
-  context.strokeRect(x - 1, y - 1, drawWidth + 2, drawHeight + 2);
+  roundedRectPath(context, lensX + 0.5, lensY + 0.5, lensWidth - 1, lensHeight - 1, lensRadius);
+  context.stroke();
+  context.restore();
+}
+
+function overviewGuidedView(bounds) {
+  const sourceWidth = dom.pageImage.naturalWidth;
+  const sourceHeight = dom.pageImage.naturalHeight;
+  const scale = Math.min(bounds.width / sourceWidth, bounds.height / sourceHeight) * 0.96;
+  return {
+    scale,
+    x: (bounds.width - sourceWidth * scale) / 2,
+    y: (bounds.height - sourceHeight * scale) / 2,
+  };
+}
+
+function drawGuidedRegion(options = {}) {
+  if (!state.guidedActive || !state.guidedRegions.length) return;
+  const region = state.guidedRegions[state.guidedRegionIndex];
+  const bounds = dom.guidedLayer.getBoundingClientRect();
+  const target = calculateGuidedViewport(
+    dom.pageImage.naturalWidth,
+    dom.pageImage.naturalHeight,
+    bounds.width,
+    bounds.height,
+    region,
+    { mobile: isMobileLayout() },
+  );
+  const start = state.guidedView || overviewGuidedView(bounds);
+  const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const duration = options.animate === false || reducedMotion ? 0 : 320;
+  const startedAt = performance.now();
+  cancelAnimationFrame(state.guidedAnimationFrame);
+
+  const frame = (now) => {
+    const progress = duration ? Math.min(1, (now - startedAt) / duration) : 1;
+    const eased = 1 - (1 - progress) ** 3;
+    const view = {
+      scale: start.scale + (target.scale - start.scale) * eased,
+      x: start.x + (target.x - start.x) * eased,
+      y: start.y + (target.y - start.y) * eased,
+    };
+    paintGuidedView(view, region);
+    if (progress < 1) state.guidedAnimationFrame = requestAnimationFrame(frame);
+    else {
+      state.guidedAnimationFrame = null;
+      state.guidedView = target;
+    }
+  };
+  state.guidedAnimationFrame = requestAnimationFrame(frame);
+
   dom.guidedCounter.textContent = `${state.guidedRegionIndex + 1} de ${state.guidedRegions.length}`;
   dom.guidedHelp.textContent = state.guidedRegionIndex + 1 === state.guidedRegions.length
-    ? "Última fala desta página"
-    : "Toque à direita ou use o botão para a próxima fala";
+    ? "Última fala desta página · a arte ao redor continua visível"
+    : "A página continua inteira · avance para aproximar a próxima fala";
 }
 
 async function nextGuidedRegion() {
@@ -874,6 +1074,9 @@ function previousGuidedRegion() {
 }
 
 function closeGuidedMode() {
+  cancelAnimationFrame(state.guidedAnimationFrame);
+  state.guidedAnimationFrame = null;
+  state.guidedView = null;
   state.guidedActive = false;
   state.guidedRegions = [];
   state.guidedRegionIndex = 0;
@@ -961,6 +1164,7 @@ function manualPointerUp(event) {
   state.guidedRegions = regions;
   state.guidedRegionIndex = regions.indexOf(region);
   state.guidedActive = true;
+  state.guidedView = null;
   cancelManualRegion();
   dom.guidedLayer.hidden = false;
   dom.guidedButton.classList.add("active");
@@ -1078,12 +1282,13 @@ function bindEvents() {
 
   dom.readerViewport.addEventListener("touchmove", (event) => {
     if (event.touches.length !== 2 || state.viewMode === "scroll") return;
+    event.preventDefault();
     const distance = Math.hypot(
       event.touches[0].clientX - event.touches[1].clientX,
       event.touches[0].clientY - event.touches[1].clientY,
     );
     if (state.touch.pinchDistance) setZoom(state.touch.pinchZoom * (distance / state.touch.pinchDistance));
-  }, { passive: true });
+  }, { passive: false });
 
   dom.readerViewport.addEventListener("touchend", (event) => {
     if (state.viewMode === "scroll" || state.zoom > 1.1 || event.changedTouches.length !== 1) return;
@@ -1098,9 +1303,16 @@ function bindEvents() {
   }, { passive: true });
 
   dom.readerViewport.addEventListener("dblclick", () => setZoom(state.zoom > 1.1 ? 1 : 2.25));
+  dom.readerViewport.addEventListener("scroll", scheduleScrollPositionUpdate, { passive: true });
   dom.readerView.addEventListener("pointermove", resetControlsTimer);
   dom.readerView.addEventListener("pointerdown", resetControlsTimer);
-  addEventListener("resize", () => { if (state.guidedActive) drawGuidedRegion(); });
+  const redrawGuidedAfterResize = () => {
+    if (!state.guidedActive) return;
+    state.guidedView = null;
+    drawGuidedRegion({ animate: false });
+  };
+  addEventListener("resize", redrawGuidedAfterResize);
+  window.visualViewport?.addEventListener("resize", redrawGuidedAfterResize);
 
   document.addEventListener("keydown", (event) => {
     if (dom.readerView.hidden || ["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName)) return;
