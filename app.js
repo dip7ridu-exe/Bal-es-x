@@ -1,4 +1,19 @@
-import { detectSpeechRegions, sortRegions } from "./guided.js?v=3-bubble";
+import { detectSpeechRegions, sortRegions } from "./guided.js?v=4-library";
+import {
+  comicMatchScore,
+  createComicId,
+  getComicFiles,
+  getLibraryComic,
+  listLibraryComics,
+  normalizeMatchText,
+  parseComicFilename,
+  removeLibraryComic,
+  requestPersistentStorage,
+  saveComicFiles,
+  saveLibraryComic,
+  storageEstimate,
+} from "./library.js?v=4-library";
+import { searchComicCatalog } from "./catalog.js?v=4-library";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -6,17 +21,35 @@ const imagePattern = /\.(avif|bmp|gif|jpe?g|png|webp)$/i;
 const archivePattern = /\.(cbr|cbz|rar|zip)$/i;
 const HISTORY_KEY = "balao-reader-history-v1";
 const PREFS_KEY = "balao-reader-prefs-v1";
+const CATALOG_KEY = "balao-reader-catalog-v1";
 const isMobileLayout = () => matchMedia("(max-width: 760px), (hover: none) and (pointer: coarse) and (max-width: 1024px)").matches;
 
 const dom = {
   homeView: $("#homeView"),
   readerView: $("#readerView"),
+  libraryPanel: $("#libraryPanel"),
+  discoverPanel: $("#discoverPanel"),
+  libraryNavButton: $("#libraryNavButton"),
+  discoverNavButton: $("#discoverNavButton"),
   dropZone: $("#dropZone"),
   openButton: $("#openButton"),
+  headerImportButton: $("#headerImportButton"),
   fileInput: $("#fileInput"),
   themeButton: $("#themeButton"),
-  recentGrid: $("#recentGrid"),
-  clearHistoryButton: $("#clearHistoryButton"),
+  libraryGrid: $("#libraryGrid"),
+  librarySearchInput: $("#librarySearchInput"),
+  libraryTotalCount: $("#libraryTotalCount"),
+  libraryFileCount: $("#libraryFileCount"),
+  libraryReadingCount: $("#libraryReadingCount"),
+  catalogSearchForm: $("#catalogSearchForm"),
+  catalogSearchInput: $("#catalogSearchInput"),
+  catalogStatus: $("#catalogStatus"),
+  catalogResults: $("#catalogResults"),
+  googleApiKeyInput: $("#googleApiKeyInput"),
+  saveCatalogSettingsButton: $("#saveCatalogSettingsButton"),
+  comicDetailDialog: $("#comicDetailDialog"),
+  comicDetailContent: $("#comicDetailContent"),
+  closeComicDetailButton: $("#closeComicDetailButton"),
   closeReaderButton: $("#closeReaderButton"),
   bookTitle: $("#bookTitle"),
   bookMeta: $("#bookMeta"),
@@ -98,6 +131,7 @@ const defaultPrefs = {
 
 const state = {
   reader: null,
+  currentComic: null,
   fileKey: null,
   pageIndex: 0,
   pageCount: 0,
@@ -116,7 +150,15 @@ const state = {
   guidedCache: new Map(),
   manualMode: false,
   manualStart: null,
-  pendingRecent: null,
+  currentComicId: null,
+  libraryItems: [],
+  libraryFilter: "all",
+  libraryQuery: "",
+  catalogResults: [],
+  detailItem: null,
+  fileTargetId: null,
+  fileTargetCatalog: null,
+  runtimeFiles: new Map(),
   scrollObserver: null,
   scrollFrame: null,
   thumbnailObserver: null,
@@ -160,10 +202,6 @@ function bookName(name) {
 
 function naturalCompare(a, b) {
   return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
-}
-
-function fileIdentity(file) {
-  return `${file.name}::${file.size}::${file.lastModified || 0}`;
 }
 
 function setLoading(visible, title = "Abrindo seu quadrinho…", detail = "Lendo as páginas no seu aparelho", progress = 15) {
@@ -210,77 +248,209 @@ function persistPrefs() {
   });
 }
 
-function historyItems() {
-  const items = readJson(HISTORY_KEY, []);
-  return Array.isArray(items) ? items : [];
+function catalogPrefs() {
+  return readJson(CATALOG_KEY, { googleApiKey: "" });
 }
 
-function updateHistory() {
-  if (!state.reader || !state.fileKey) return;
-  const items = historyItems().filter((item) => item.key !== state.fileKey);
-  items.unshift({
-    key: state.fileKey,
-    name: state.reader.name,
-    format: state.reader.format,
-    size: state.reader.size,
-    page: state.pageIndex,
-    pages: state.pageCount,
-    updatedAt: Date.now(),
+function switchHomePanel(panelId) {
+  const showLibrary = panelId !== "discoverPanel";
+  dom.libraryPanel.hidden = !showLibrary;
+  dom.discoverPanel.hidden = showLibrary;
+  dom.libraryNavButton.classList.toggle("active", showLibrary);
+  dom.discoverNavButton.classList.toggle("active", !showLibrary);
+  if (!showLibrary) requestAnimationFrame(() => dom.catalogSearchInput.focus());
+  scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function comicSubtitle(item) {
+  const parts = [];
+  if (item.volume) parts.push(`Vol. ${item.volume}`);
+  if (item.issue) parts.push(`#${String(item.issue).padStart(2, "0")}`);
+  if (item.year) parts.push(String(item.year));
+  if (!parts.length && item.publisher) parts.push(item.publisher);
+  return parts.join(" · ") || "Edição não informada";
+}
+
+function comicHasReadableFile(item) {
+  return Boolean(item.hasStoredFile || state.runtimeFiles.has(item.id));
+}
+
+function createComicCover(item, className = "comic-card-cover") {
+  const cover = document.createElement("div");
+  cover.className = className;
+  if (item.cover) {
+    const image = document.createElement("img");
+    image.src = item.cover;
+    image.alt = `Capa de ${item.title}`;
+    image.loading = "lazy";
+    image.referrerPolicy = "no-referrer";
+    image.addEventListener("error", () => {
+      image.remove();
+      cover.classList.add("cover-missing");
+    }, { once: true });
+    cover.append(image);
+  } else {
+    cover.classList.add("cover-missing");
+  }
+  const fallback = document.createElement("span");
+  fallback.setAttribute("aria-hidden", "true");
+  fallback.innerHTML = `<svg viewBox="0 0 32 32"><path d="M6 4h15a5 5 0 0 1 5 5v19H10a4 4 0 0 1-4-4z"/><path d="M10 28a4 4 0 0 1 0-8h16M11 10h9M11 14h6"/></svg>`;
+  cover.append(fallback);
+  return cover;
+}
+
+function libraryCard(item) {
+  const article = document.createElement("article");
+  article.className = "comic-card library-comic-card";
+  article.dataset.comicId = item.id;
+  article.tabIndex = 0;
+
+  const cover = createComicCover(item);
+  const progress = item.pages ? Math.round(((item.page || 0) / Math.max(1, item.pages - 1)) * 100) : 0;
+  const badge = document.createElement("span");
+  badge.className = `comic-file-badge ${comicHasReadableFile(item) ? "ready" : "wanted"}`;
+  badge.textContent = comicHasReadableFile(item) ? "Pronta para ler" : "Arquivo necessário";
+  cover.append(badge);
+  if (progress > 0 && comicHasReadableFile(item)) {
+    const progressBar = document.createElement("span");
+    progressBar.className = "cover-progress";
+    progressBar.innerHTML = `<span style="width:${progress}%"></span>`;
+    cover.append(progressBar);
+  }
+
+  const body = document.createElement("div");
+  body.className = "comic-card-body";
+  const title = document.createElement("h2");
+  title.textContent = item.title;
+  const meta = document.createElement("p");
+  meta.textContent = comicSubtitle(item);
+  const secondary = document.createElement("small");
+  secondary.textContent = item.authors?.length ? item.authors.slice(0, 2).join(", ") : item.format || item.publisher || "HQ";
+  const actions = document.createElement("div");
+  actions.className = "comic-card-actions";
+  const primary = document.createElement("button");
+  primary.type = "button";
+  primary.className = "comic-card-primary";
+  primary.textContent = comicHasReadableFile(item) ? (progress > 0 ? "Continuar" : "Ler agora") : "Vincular arquivo";
+  primary.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (comicHasReadableFile(item)) openLibraryComic(item.id);
+    else chooseFilesFor(item.id);
   });
-  saveJson(HISTORY_KEY, items.slice(0, 12));
-  renderHistory();
+  const details = document.createElement("button");
+  details.type = "button";
+  details.className = "comic-card-menu";
+  details.setAttribute("aria-label", `Ver detalhes de ${item.title}`);
+  details.innerHTML = `<svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>`;
+  details.addEventListener("click", (event) => { event.stopPropagation(); openComicDetails(item, "library"); });
+  actions.append(primary, details);
+  body.append(title, meta, secondary, actions);
+  article.append(cover, body);
+
+  article.addEventListener("click", () => openComicDetails(item, "library"));
+  article.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      openComicDetails(item, "library");
+    }
+  });
+  bindFileDrop(article, { targetComicId: item.id });
+  return article;
 }
 
-function renderHistory() {
-  const items = historyItems();
-  dom.recentGrid.replaceChildren();
-  dom.clearHistoryButton.hidden = items.length === 0;
-  if (!items.length) {
-    const empty = document.createElement("div");
-    empty.className = "recent-empty";
-    empty.innerHTML = `
-      <span class="recent-empty-icon" aria-hidden="true">
-        <svg viewBox="0 0 24 24"><path d="M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3z"/><path d="M8 20a3 3 0 0 1 0-6h11M9 8h6"/></svg>
-      </span>
-      <div><strong>Nenhuma leitura recente</strong><span>Seus arquivos nunca são enviados. O histórico fica apenas neste navegador.</span></div>`;
-    dom.recentGrid.append(empty);
-    return;
-  }
+function emptyLibraryCard() {
+  const empty = document.createElement("div");
+  empty.className = "library-empty";
+  empty.innerHTML = `
+    <span aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M6 5h14a5 5 0 0 1 5 5v17H10a4 4 0 0 1-4-4z"/><path d="M10 27a4 4 0 0 1 0-8h15M12 11h7"/></svg></span>
+    <div><strong>Sua biblioteca está esperando a primeira HQ</strong><p>Importe um arquivo que você já possui ou vá em Descobrir para salvar algo que quer ler.</p></div>`;
+  const actions = document.createElement("div");
+  const importButton = document.createElement("button");
+  importButton.type = "button";
+  importButton.className = "primary-button compact";
+  importButton.textContent = "Importar HQ";
+  importButton.addEventListener("click", () => chooseFilesFor());
+  const discoverButton = document.createElement("button");
+  discoverButton.type = "button";
+  discoverButton.className = "secondary-button compact";
+  discoverButton.textContent = "Explorar catálogo";
+  discoverButton.addEventListener("click", () => switchHomePanel("discoverPanel"));
+  actions.append(importButton, discoverButton);
+  empty.append(actions);
+  return empty;
+}
 
-  for (const item of items.slice(0, 8)) {
-    const card = document.createElement("button");
-    card.type = "button";
-    card.className = "recent-card";
-    card.dataset.key = item.key;
-    const progress = item.pages ? Math.round(((item.page + 1) / item.pages) * 100) : 0;
-    const top = document.createElement("div");
-    top.className = "recent-card-top";
-    const chip = document.createElement("span");
-    chip.className = "format-chip";
-    chip.textContent = item.format;
-    const date = document.createElement("small");
-    date.textContent = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short" }).format(item.updatedAt);
-    top.append(chip, date);
-    const title = document.createElement("h3");
-    title.textContent = bookName(item.name);
-    const bottom = document.createElement("div");
-    bottom.className = "recent-card-bottom";
-    const bar = document.createElement("span");
-    bar.className = "recent-progress";
-    const fill = document.createElement("span");
-    fill.style.width = `${progress}%`;
-    bar.append(fill);
-    const page = document.createElement("small");
-    page.textContent = `${item.page + 1}/${item.pages}`;
-    bottom.append(bar, page);
-    card.append(top, title, bottom);
-    card.addEventListener("click", () => {
-      state.pendingRecent = item;
-      dom.fileInput.multiple = false;
-      dom.fileInput.click();
-    });
-    dom.recentGrid.append(card);
+function renderLibrary() {
+  const query = normalizeMatchText(state.libraryQuery);
+  const visible = state.libraryItems.filter((item) => {
+    if (state.libraryFilter === "owned" && !comicHasReadableFile(item)) return false;
+    if (state.libraryFilter === "wishlist" && comicHasReadableFile(item)) return false;
+    if (query && !normalizeMatchText(`${item.title} ${item.authors?.join(" ") || ""} ${item.publisher || ""}`).includes(query)) return false;
+    return true;
+  });
+  dom.libraryGrid.replaceChildren();
+  if (!visible.length) dom.libraryGrid.append(emptyLibraryCard());
+  else visible.forEach((item) => dom.libraryGrid.append(libraryCard(item)));
+
+  dom.libraryTotalCount.textContent = String(state.libraryItems.length);
+  dom.libraryFileCount.textContent = String(state.libraryItems.filter(comicHasReadableFile).length);
+  dom.libraryReadingCount.textContent = String(state.libraryItems.filter((item) => comicHasReadableFile(item) && (item.page || 0) > 0 && (item.page || 0) < (item.pages || 1) - 1).length);
+}
+
+async function refreshLibrary() {
+  try {
+    state.libraryItems = await listLibraryComics();
+    renderLibrary();
+  } catch (error) {
+    console.error(error);
+    dom.libraryGrid.replaceChildren(emptyLibraryCard());
+    toast("Não foi possível abrir a biblioteca local neste navegador.", "error");
   }
+}
+
+async function updateHistory() {
+  if (!state.reader || !state.currentComicId) return;
+  const comicId = state.currentComicId;
+  const page = state.pageIndex;
+  const pages = state.pageCount;
+  const comic = await getLibraryComic(comicId);
+  if (!comic) return;
+  comic.page = page;
+  comic.pages = pages;
+  comic.updatedAt = Date.now();
+  comic.lastReadAt = Date.now();
+  await saveLibraryComic(comic);
+  const local = state.libraryItems.find((item) => item.id === comic.id);
+  if (local) Object.assign(local, comic);
+}
+
+async function migrateLegacyHistory() {
+  if (localStorage.getItem("balao-reader-library-migrated-v1")) return;
+  const legacy = readJson(HISTORY_KEY, []);
+  if (Array.isArray(legacy)) {
+    for (const item of legacy) {
+      const parsed = parseComicFilename(item.name || "Quadrinho");
+      await saveLibraryComic({
+        id: createComicId("legacy"),
+        title: parsed.title,
+        matchKey: parsed.matchKey,
+        volume: parsed.volume,
+        issue: parsed.issue,
+        year: parsed.year,
+        cover: "",
+        format: item.format,
+        fileName: item.name,
+        size: item.size,
+        page: item.page || 0,
+        pages: item.pages || 0,
+        status: "wishlist",
+        hasStoredFile: false,
+        addedAt: item.updatedAt || Date.now(),
+        updatedAt: item.updatedAt || Date.now(),
+      });
+    }
+  }
+  localStorage.setItem("balao-reader-library-migrated-v1", "1");
 }
 
 function createPageCache(loader, disposer) {
@@ -424,78 +594,254 @@ function createImageReader(files) {
   };
 }
 
-async function openFiles(fileList) {
+async function createReaderFromFiles(files) {
+  const first = files[0];
+  const allImages = files.every((file) => file.type.startsWith("image/") || imagePattern.test(file.name));
+  if (allImages) return createImageReader(files);
+  if (/\.pdf$/i.test(first.name) || first.type === "application/pdf") return createPdfReader(first);
+  if (archivePattern.test(first.name)) return createArchiveReader(first);
+  throw new Error("Formato não reconhecido. Use CBR, CBZ, ZIP, PDF, JPG, PNG, WEBP ou AVIF.");
+}
+
+async function coverFromReader(reader) {
+  const url = await reader.getPage(0);
+  const image = new Image();
+  image.src = url;
+  await new Promise((resolve, reject) => {
+    if (image.complete && image.naturalWidth) return resolve();
+    image.addEventListener("load", resolve, { once: true });
+    image.addEventListener("error", () => reject(new Error("Não foi possível criar a capa.")), { once: true });
+  });
+  const scale = Math.min(1, 440 / image.naturalWidth, 680 / image.naturalHeight);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+  canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+  const context = canvas.getContext("2d", { alpha: false });
+  context.fillStyle = "#fff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  const cover = canvas.toDataURL("image/webp", 0.84);
+  canvas.width = 1;
+  canvas.height = 1;
+  return cover;
+}
+
+function catalogRecord(item) {
+  return {
+    id: item.id,
+    source: item.source,
+    sourceId: item.sourceId,
+    title: item.title,
+    subtitle: item.subtitle || "",
+    matchKey: normalizeMatchText(item.title),
+    authors: item.authors || [],
+    publisher: item.publisher || "",
+    publishedDate: item.publishedDate || "",
+    year: item.year || null,
+    description: item.description || "",
+    cover: item.cover || "",
+    categories: item.categories || [],
+    pageCount: item.pageCount || null,
+    isbn: item.isbn || "",
+    infoLink: item.infoLink || "",
+    issue: item.issue || null,
+    volume: item.volume || null,
+    status: "wishlist",
+    hasStoredFile: false,
+    page: 0,
+    pages: 0,
+    addedAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+}
+
+function chooseFilesFor(targetComicId = null, catalogItem = null) {
+  state.fileTargetId = targetComicId;
+  state.fileTargetCatalog = catalogItem;
+  dom.fileInput.multiple = true;
+  dom.fileInput.click();
+}
+
+function bindFileDrop(element, options = {}) {
+  element.addEventListener("dragenter", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    element.classList.add("file-dragging");
+  });
+  element.addEventListener("dragover", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+  });
+  element.addEventListener("dragleave", (event) => {
+    event.stopPropagation();
+    if (!element.contains(event.relatedTarget)) element.classList.remove("file-dragging");
+  });
+  element.addEventListener("drop", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    element.classList.remove("file-dragging");
+    importFiles(event.dataTransfer.files, options);
+  });
+}
+
+function bestLibraryMatch(metadata) {
+  return state.libraryItems
+    .map((item) => ({ item, score: comicMatchScore(metadata, item) }))
+    .sort((a, b) => b.score - a.score)[0];
+}
+
+async function importFiles(fileList, options = {}) {
   const files = [...fileList].filter(Boolean);
   if (!files.length) return;
   const first = files[0];
-  const allImages = files.every((file) => file.type.startsWith("image/") || imagePattern.test(file.name));
   let reader;
-  setLoading(true);
+  setLoading(true, "Adicionando à biblioteca…", "Identificando a HQ e preparando a capa", 18);
 
   try {
-    state.reader?.dispose?.();
-    state.reader = null;
-    state.guidedCache.clear();
-    if (allImages) {
-      reader = createImageReader(files);
-    } else if (/\.pdf$/i.test(first.name) || first.type === "application/pdf") {
-      reader = await createPdfReader(first);
-    } else if (archivePattern.test(first.name)) {
-      reader = await createArchiveReader(first);
-    } else {
-      throw new Error("Formato não reconhecido. Use CBR, CBZ, ZIP, PDF, JPG, PNG, WEBP ou AVIF.");
+    reader = await createReaderFromFiles(files);
+    const metadata = parseComicFilename(first.name);
+    let target = options.targetComicId ? await getLibraryComic(options.targetComicId) : null;
+    if (!target && options.catalogItem) target = catalogRecord(options.catalogItem);
+    if (!target) {
+      const match = bestLibraryMatch(metadata);
+      if (match?.score >= 0.78) target = match.item;
+    }
+    let cover = target?.cover || "";
+    try {
+      setLoading(true, "Criando a capa…", `Encontrei ${reader.pageCount} ${reader.pageCount === 1 ? "página" : "páginas"}`, 48);
+      cover = await coverFromReader(reader);
+    } catch {
+      // A ficha continua útil mesmo se uma capa muito incomum não puder ser convertida.
     }
 
-    state.reader = reader;
-    state.fileKey = allImages && files.length > 1
-      ? `images::${files.map(fileIdentity).join("|")}`
-      : fileIdentity(first);
-    state.pageCount = reader.pageCount;
-    const saved = historyItems().find((item) => item.key === state.fileKey);
-    const requested = state.pendingRecent?.key === state.fileKey ? state.pendingRecent : saved;
-    state.pageIndex = Math.min(requested?.page || 0, reader.pageCount - 1);
-    state.pendingRecent = null;
-    state.zoom = 1;
-    state.rotation = 0;
-    state.pageAspect = null;
-    setLoading(true, "Montando o leitor…", `${reader.pageCount} ${reader.pageCount === 1 ? "página encontrada" : "páginas encontradas"}`, 76);
-    await showReader();
+    const id = target?.id || createComicId("local");
+    const now = Date.now();
+    const record = {
+      ...(target || {}),
+      id,
+      title: target?.title || metadata.title,
+      matchKey: target?.matchKey || metadata.matchKey,
+      volume: target?.volume || metadata.volume,
+      issue: target?.issue || metadata.issue,
+      year: target?.year || metadata.year,
+      cover,
+      fileName: files.length > 1 ? `${files.length} imagens` : first.name,
+      format: reader.format,
+      size: files.reduce((sum, file) => sum + file.size, 0),
+      pages: reader.pageCount,
+      page: Math.min(target?.page || 0, Math.max(0, reader.pageCount - 1)),
+      status: "owned",
+      addedAt: target?.addedAt || now,
+      updatedAt: now,
+      hasStoredFile: false,
+    };
+
+    setLoading(true, "Guardando no aparelho…", "A HQ continua privada e não é enviada", 72);
+    await requestPersistentStorage();
+    let stored = false;
+    try {
+      const estimate = await storageEstimate();
+      const required = record.size * 1.08;
+      const available = estimate?.quota && Number.isFinite(estimate.usage) ? estimate.quota - estimate.usage : Infinity;
+      if (required > available * 0.92) throw new DOMException("Espaço local insuficiente", "QuotaExceededError");
+      await saveComicFiles(id, files);
+      stored = true;
+    } catch (error) {
+      console.warn("Arquivo disponível apenas nesta sessão:", error);
+      state.runtimeFiles.set(id, files);
+    }
+    record.hasStoredFile = stored;
+    await saveLibraryComic(record);
+    reader.dispose?.();
+    reader = null;
+    await refreshLibrary();
+    switchHomePanel("libraryPanel");
+    dom.comicDetailDialog.open && dom.comicDetailDialog.close();
     setLoading(false);
+    toast(stored
+      ? `${record.title} foi adicionada à biblioteca.`
+      : `${record.title} foi adicionada. O arquivo ficará disponível até esta aba ser fechada.`, stored ? "success" : "info");
   } catch (error) {
     console.error(error);
     reader?.dispose?.();
-    state.pendingRecent = null;
     setLoading(false);
     const detail = error?.message || "Não foi possível abrir esse arquivo.";
     toast(detail, "error");
   } finally {
     dom.fileInput.value = "";
     dom.fileInput.multiple = true;
+    state.fileTargetId = null;
+    state.fileTargetCatalog = null;
   }
+}
+
+async function startReaderWithFiles(files, comic) {
+  let reader;
+  setLoading(true, "Abrindo sua HQ…", "Carregando o arquivo guardado neste aparelho", 20);
+  try {
+    state.reader?.dispose?.();
+    state.guidedCache.clear();
+    reader = await createReaderFromFiles(files);
+    state.reader = reader;
+    state.currentComicId = comic.id;
+    state.currentComic = comic;
+    state.fileKey = comic.id;
+    state.pageCount = reader.pageCount;
+    state.pageIndex = Math.min(comic.page || 0, reader.pageCount - 1);
+    state.zoom = 1;
+    state.rotation = 0;
+    state.pageAspect = null;
+    await showReader();
+    setLoading(false);
+  } catch (error) {
+    console.error(error);
+    reader?.dispose?.();
+    setLoading(false);
+    toast(error?.message || "Não foi possível abrir esta HQ.", "error");
+  }
+}
+
+async function openLibraryComic(id) {
+  const comic = await getLibraryComic(id);
+  if (!comic) return;
+  let files = state.runtimeFiles.get(id) || [];
+  if (!files.length && comic.hasStoredFile) files = await getComicFiles(id);
+  if (!files.length) {
+    comic.hasStoredFile = false;
+    await saveLibraryComic(comic);
+    await refreshLibrary();
+    toast("Vincule o arquivo desta HQ para começar a leitura.");
+    chooseFilesFor(id);
+    return;
+  }
+  await startReaderWithFiles(files, comic);
 }
 
 async function showReader() {
   document.body.classList.add("reader-open");
   dom.homeView.hidden = true;
   dom.readerView.hidden = false;
-  dom.bookTitle.textContent = bookName(state.reader.name);
-  dom.bookMeta.textContent = `${state.reader.format} · ${formatBytes(state.reader.size)} · leitura local`;
+  dom.bookTitle.textContent = state.currentComic?.title || bookName(state.reader.name);
+  dom.bookMeta.textContent = `${comicSubtitle(state.currentComic || {})} · ${state.reader.format} · ${formatBytes(state.reader.size)}`;
   dom.pageSlider.max = String(state.pageCount);
   dom.footerTotalPages.textContent = String(state.pageCount);
   buildThumbnails();
   applyPreferencesToUi();
   await setViewMode(state.viewMode, false);
   await setPage(state.pageIndex, { save: false });
-  updateHistory();
+  await updateHistory();
   resetControlsTimer();
 }
 
-function closeReader() {
+async function closeReader() {
   closeGuidedMode();
   closeSettings();
-  updateHistory();
+  await updateHistory();
   state.reader?.dispose?.();
   state.reader = null;
+  state.currentComic = null;
+  state.currentComicId = null;
   state.fileKey = null;
   state.pageCount = 0;
   state.guidedCache.clear();
@@ -505,7 +851,7 @@ function closeReader() {
   document.body.classList.remove("reader-open");
   dom.readerView.hidden = true;
   dom.homeView.hidden = false;
-  renderHistory();
+  await refreshLibrary();
 }
 
 function imageLoaded(image) {
@@ -713,7 +1059,7 @@ function updatePageControls() {
 let historyTimer;
 function scheduleHistorySave() {
   clearTimeout(historyTimer);
-  historyTimer = setTimeout(updateHistory, 450);
+  historyTimer = setTimeout(() => updateHistory().catch((error) => console.warn("Não foi possível salvar o progresso:", error)), 450);
 }
 
 function preloadAround(index) {
@@ -1182,37 +1528,262 @@ function manualPointerUp(event) {
   });
 }
 
-function bindEvents() {
-  const chooseFile = () => {
-    state.pendingRecent = null;
-    dom.fileInput.multiple = true;
-    dom.fileInput.click();
-  };
-  dom.openButton.addEventListener("click", (event) => { event.stopPropagation(); chooseFile(); });
-  dom.dropZone.addEventListener("click", chooseFile);
-  dom.dropZone.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" || event.key === " ") { event.preventDefault(); chooseFile(); }
+async function saveCatalogItem(item, options = {}) {
+  const existing = await getLibraryComic(item.id);
+  const record = { ...catalogRecord(item), ...(existing || {}), updatedAt: Date.now() };
+  await saveLibraryComic(record);
+  await refreshLibrary();
+  if (!options.silent) toast(`${record.title} foi salva em Quero ler.`, "success");
+  return record;
+}
+
+function catalogCard(item) {
+  const saved = state.libraryItems.find((comic) => comic.id === item.id);
+  const article = document.createElement("article");
+  article.className = "comic-card catalog-comic-card";
+  article.tabIndex = 0;
+  const cover = createComicCover(item);
+  const source = document.createElement("span");
+  source.className = "catalog-source-badge";
+  source.textContent = item.source;
+  cover.append(source);
+
+  const body = document.createElement("div");
+  body.className = "comic-card-body";
+  const title = document.createElement("h2");
+  title.textContent = item.title;
+  const meta = document.createElement("p");
+  meta.textContent = comicSubtitle(item);
+  const author = document.createElement("small");
+  author.textContent = item.authors?.slice(0, 2).join(", ") || item.publisher || "Autor não informado";
+  const actions = document.createElement("div");
+  actions.className = "comic-card-actions";
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = `comic-card-primary ${saved ? "saved" : ""}`;
+  save.textContent = saved ? "Na biblioteca" : "Quero ler";
+  save.disabled = Boolean(saved);
+  save.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    await saveCatalogItem(item);
+    renderCatalogResults();
   });
-  ["dragenter", "dragover"].forEach((name) => dom.dropZone.addEventListener(name, (event) => {
-    event.preventDefault();
-    dom.dropZone.classList.add("dragging");
+  const link = document.createElement("button");
+  link.type = "button";
+  link.className = "comic-card-file";
+  link.setAttribute("aria-label", `Vincular arquivo de ${item.title}`);
+  link.innerHTML = `<svg viewBox="0 0 24 24"><path d="M12 15V4m0 0L8 8m4-4 4 4M5 14v5h14v-5"/></svg>`;
+  link.addEventListener("click", (event) => {
+    event.stopPropagation();
+    chooseFilesFor(saved?.id || null, item);
+  });
+  actions.append(save, link);
+  body.append(title, meta, author, actions);
+  article.append(cover, body);
+  article.addEventListener("click", () => openComicDetails(saved || item, saved ? "library" : "catalog"));
+  article.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      openComicDetails(saved || item, saved ? "library" : "catalog");
+    }
+  });
+  bindFileDrop(article, { targetComicId: saved?.id || null, catalogItem: item });
+  return article;
+}
+
+function renderCatalogResults() {
+  dom.catalogResults.replaceChildren();
+  state.catalogResults.forEach((item) => dom.catalogResults.append(catalogCard(item)));
+}
+
+function setCatalogStatus(title, message, mode = "idle") {
+  dom.catalogStatus.hidden = false;
+  dom.catalogStatus.classList.toggle("loading", mode === "loading");
+  dom.catalogStatus.classList.toggle("error", mode === "error");
+  $("strong", dom.catalogStatus).textContent = title;
+  $("span:not(.catalog-status-icon)", dom.catalogStatus).textContent = message;
+}
+
+async function performCatalogSearch(query) {
+  const value = query.trim();
+  if (value.length < 2) return;
+  dom.catalogSearchInput.value = value;
+  dom.catalogResults.replaceChildren();
+  setCatalogStatus("Pesquisando o catálogo…", "Buscando capas, edições, autores e sinopses.", "loading");
+  try {
+    state.catalogResults = await searchComicCatalog(value, catalogPrefs());
+    if (!state.catalogResults.length) {
+      setCatalogStatus("Nenhuma edição encontrada", "Tente usar somente o nome da série, o autor ou a editora.");
+      return;
+    }
+    dom.catalogStatus.hidden = true;
+    renderCatalogResults();
+  } catch (error) {
+    console.error(error);
+    setCatalogStatus("O catálogo não respondeu", error?.message || "Tente novamente em alguns instantes.", "error");
+  }
+}
+
+function detailRow(label, value) {
+  if (!value) return null;
+  const row = document.createElement("div");
+  row.className = "detail-fact";
+  const term = document.createElement("span");
+  term.textContent = label;
+  const content = document.createElement("strong");
+  content.textContent = value;
+  row.append(term, content);
+  return row;
+}
+
+function openComicDetails(item, origin = "library") {
+  const saved = state.libraryItems.find((comic) => comic.id === item.id);
+  const current = saved || item;
+  state.detailItem = current;
+  dom.comicDetailContent.replaceChildren();
+
+  const layout = document.createElement("div");
+  layout.className = "comic-detail-layout";
+  const cover = createComicCover(current, "comic-detail-cover");
+  const content = document.createElement("div");
+  content.className = "comic-detail-copy";
+  const eyebrow = document.createElement("span");
+  eyebrow.className = "detail-eyebrow";
+  eyebrow.textContent = saved
+    ? (comicHasReadableFile(saved) ? "NA SUA BIBLIOTECA · PRONTA PARA LER" : "NA SUA LISTA · AGUARDANDO ARQUIVO")
+    : `${current.source || "CATÁLOGO"} · FICHA DA HQ`;
+  const title = document.createElement("h2");
+  title.textContent = current.title;
+  const subtitle = document.createElement("p");
+  subtitle.className = "detail-subtitle";
+  subtitle.textContent = current.subtitle || comicSubtitle(current);
+  const facts = document.createElement("div");
+  facts.className = "detail-facts";
+  [
+    detailRow("Autores", current.authors?.join(", ")),
+    detailRow("Editora", current.publisher),
+    detailRow("Publicação", current.publishedDate || current.year),
+    detailRow("Páginas", current.pageCount || current.pages),
+    detailRow("ISBN", current.isbn),
+  ].filter(Boolean).forEach((row) => facts.append(row));
+  const descriptionTitle = document.createElement("h3");
+  descriptionTitle.textContent = "Sinopse";
+  const description = document.createElement("p");
+  description.className = "detail-description";
+  description.textContent = current.description || "Ainda não há uma sinopse disponível para esta edição.";
+  const tags = document.createElement("div");
+  tags.className = "detail-tags";
+  (current.categories || []).slice(0, 5).forEach((category) => {
+    const tag = document.createElement("span");
+    tag.textContent = category;
+    tags.append(tag);
+  });
+
+  const drop = document.createElement("div");
+  drop.className = "comic-detail-drop";
+  drop.innerHTML = `<svg viewBox="0 0 24 24"><path d="M12 15V4m0 0L8 8m4-4 4 4M5 14v5h14v-5"/></svg><div><strong>Tem o arquivo?</strong><span>Arraste o CBR, CBZ ou PDF aqui para vincular automaticamente.</span></div>`;
+  bindFileDrop(drop, { targetComicId: saved?.id || null, catalogItem: origin === "catalog" ? item : null });
+
+  const actions = document.createElement("div");
+  actions.className = "comic-detail-actions";
+  const primary = document.createElement("button");
+  primary.type = "button";
+  primary.className = "primary-button compact";
+  if (saved && comicHasReadableFile(saved)) {
+    primary.textContent = "Ler agora";
+    primary.addEventListener("click", () => { dom.comicDetailDialog.close(); openLibraryComic(saved.id); });
+  } else {
+    primary.textContent = "Vincular meu arquivo";
+    primary.addEventListener("click", () => chooseFilesFor(saved?.id || null, origin === "catalog" ? item : null));
+  }
+  actions.append(primary);
+
+  if (!saved) {
+    const save = document.createElement("button");
+    save.type = "button";
+    save.className = "secondary-button compact";
+    save.textContent = "Salvar em Quero ler";
+    save.addEventListener("click", async () => {
+      const record = await saveCatalogItem(item);
+      dom.comicDetailDialog.close();
+      openComicDetails(record, "library");
+      renderCatalogResults();
+    });
+    actions.append(save);
+  } else {
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "detail-remove-button";
+    remove.textContent = "Remover da biblioteca";
+    remove.addEventListener("click", async () => {
+      if (!confirm(`Remover “${saved.title}” e o arquivo guardado neste aparelho?`)) return;
+      await removeLibraryComic(saved.id);
+      state.runtimeFiles.delete(saved.id);
+      dom.comicDetailDialog.close();
+      await refreshLibrary();
+      renderCatalogResults();
+    });
+    actions.append(remove);
+  }
+
+  if (current.infoLink) {
+    const sourceLink = document.createElement("a");
+    sourceLink.href = current.infoLink;
+    sourceLink.target = "_blank";
+    sourceLink.rel = "noopener noreferrer";
+    sourceLink.textContent = `Ver ficha em ${current.source || "catálogo"}`;
+    actions.append(sourceLink);
+  }
+
+  content.append(eyebrow, title, subtitle, facts, descriptionTitle, description, tags, drop, actions);
+  layout.append(cover, content);
+  dom.comicDetailContent.append(layout);
+  if (dom.comicDetailDialog.showModal) dom.comicDetailDialog.showModal();
+  else dom.comicDetailDialog.setAttribute("open", "");
+}
+
+function bindEvents() {
+  dom.libraryNavButton.addEventListener("click", () => switchHomePanel("libraryPanel"));
+  dom.discoverNavButton.addEventListener("click", () => switchHomePanel("discoverPanel"));
+  dom.headerImportButton.addEventListener("click", () => chooseFilesFor());
+  dom.openButton.addEventListener("click", (event) => { event.stopPropagation(); chooseFilesFor(); });
+  dom.dropZone.addEventListener("click", () => chooseFilesFor());
+  dom.dropZone.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") { event.preventDefault(); chooseFilesFor(); }
+  });
+  bindFileDrop(dom.dropZone);
+  dom.fileInput.addEventListener("change", () => importFiles(dom.fileInput.files, {
+    targetComicId: state.fileTargetId,
+    catalogItem: state.fileTargetCatalog,
   }));
-  ["dragleave", "drop"].forEach((name) => dom.dropZone.addEventListener(name, (event) => {
-    event.preventDefault();
-    dom.dropZone.classList.remove("dragging");
+
+  dom.librarySearchInput.addEventListener("input", () => {
+    state.libraryQuery = dom.librarySearchInput.value;
+    renderLibrary();
+  });
+  $$("[data-library-filter]").forEach((button) => button.addEventListener("click", () => {
+    state.libraryFilter = button.dataset.libraryFilter;
+    $$("[data-library-filter]").forEach((item) => item.classList.toggle("active", item === button));
+    renderLibrary();
   }));
-  dom.dropZone.addEventListener("drop", (event) => openFiles(event.dataTransfer.files));
-  dom.fileInput.addEventListener("change", () => openFiles(dom.fileInput.files));
+  dom.catalogSearchForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    performCatalogSearch(dom.catalogSearchInput.value);
+  });
+  $$("[data-catalog-query]").forEach((button) => button.addEventListener("click", () => performCatalogSearch(button.dataset.catalogQuery)));
+  dom.googleApiKeyInput.value = catalogPrefs().googleApiKey || "";
+  dom.saveCatalogSettingsButton.addEventListener("click", () => {
+    saveJson(CATALOG_KEY, { googleApiKey: dom.googleApiKeyInput.value.trim() });
+    toast("Configuração do catálogo salva somente neste aparelho.", "success");
+  });
+  dom.closeComicDetailButton.addEventListener("click", () => dom.comicDetailDialog.close());
+  dom.comicDetailDialog.addEventListener("click", (event) => {
+    if (event.target === dom.comicDetailDialog) dom.comicDetailDialog.close();
+  });
 
   dom.themeButton.addEventListener("click", () => {
     document.documentElement.dataset.theme = document.documentElement.dataset.theme === "light" ? "dark" : "light";
     persistPrefs();
-  });
-  dom.clearHistoryButton.addEventListener("click", () => {
-    if (confirm("Limpar o histórico de leitura deste navegador?")) {
-      saveJson(HISTORY_KEY, []);
-      renderHistory();
-    }
   });
   dom.closeReaderButton.addEventListener("click", closeReader);
   [dom.previousPageZone, dom.footerPreviousButton, dom.mobilePreviousButton].forEach((button) => button.addEventListener("click", previousPage));
@@ -1365,7 +1936,16 @@ function registerServiceWorker() {
   }
 }
 
-loadPrefs();
-renderHistory();
-bindEvents();
-registerServiceWorker();
+async function initializeApp() {
+  loadPrefs();
+  bindEvents();
+  registerServiceWorker();
+  try {
+    await migrateLegacyHistory();
+  } catch (error) {
+    console.warn("Não foi possível migrar o histórico antigo:", error);
+  }
+  await refreshLibrary();
+}
+
+initializeApp();

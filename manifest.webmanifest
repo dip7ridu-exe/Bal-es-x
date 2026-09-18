@@ -1,7 +1,7 @@
 {
   "name": "Balão — Leitor de quadrinhos",
   "short_name": "Balão",
-  "description": "Leitor privado de CBR, CBZ, PDF e imagens com zoom guiado de falas.",
+  "description": "Biblioteca privada de HQs com catálogo, leitura de CBR, CBZ e PDF e zoom guiado de falas.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

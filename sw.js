@@ -1,10 +1,12 @@
-const CACHE_NAME = "balao-reader-v3-bubble";
+const CACHE_NAME = "balao-reader-v4-library";
 const CORE_FILES = [
   "./",
   "./index.html",
-  "./styles.css?v=3-bubble",
-  "./app.js?v=3-bubble",
-  "./guided.js?v=3-bubble",
+  "./styles.css?v=4-library",
+  "./app.js?v=4-library",
+  "./guided.js?v=4-library",
+  "./library.js?v=4-library",
+  "./catalog.js?v=4-library",
   "./favicon.svg",
   "./manifest.webmanifest",
   "./vendor/pdfjs/pdf.mjs",
